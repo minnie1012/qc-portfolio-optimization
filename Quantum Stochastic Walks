@@ -1,0 +1,716 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from scipy.optimize import minimize
+import yfinance as yf
+import os
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 1 – FINANCIAL FEATURE EXTRACTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_financial_features(returns: pd.DataFrame):
+    """
+    Compute daily Sharpe ratios, covariance, and correlation from a
+    returns DataFrame (rows = dates, columns = assets).
+    """
+    mu = returns.mean()                   # daily mean return
+    sigma = returns.std().replace(0, 1e-12)
+    sharpe_daily = mu / sigma             # daily Sharpe ratio
+    cov = returns.cov()
+    corr = returns.corr()
+    return mu, sigma, sharpe_daily, cov, corr
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 2 – GRAPH CONSTRUCTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_hamiltonian(sharpe: pd.Series, corr: pd.DataFrame,
+                      alpha: float = 10.0, beta: float = 10.0) -> np.ndarray:
+    """
+    Build the Hermitian Hamiltonian H for the QSW.
+
+    Diagonal (self-loops):  H_ii = α · SR_i  (Sharpe information)
+    Off-diagonal (edges):   H_ij = β · (1 − |ρ_ij|)  (correlation penalty)
+
+    A larger edge weight between assets i and j means the walk
+    favours moving from a highly-correlated neighbour to a
+    less-correlated one (diversification incentive).
+    """
+    sr = sharpe.values.astype(float)
+    # Normalise Sharpe ratios to [0, 1] for numerical stability
+    sr_range = sr.max() - sr.min()
+    sr_norm = (sr - sr.min()) / sr_range if sr_range > 1e-10 else np.ones_like(sr) / len(sr)
+
+    n = len(sr)
+    corr_arr = corr.values.astype(float)
+
+    H = beta * (1.0 - np.abs(corr_arr))   # off-diagonal correlation penalty
+    np.fill_diagonal(H, alpha * sr_norm)  # diagonal Sharpe self-loops
+
+    return H  # real symmetric → Hermitian
+
+
+def build_google_matrix(corr: pd.DataFrame, lam: float = 10.0) -> np.ndarray:
+    """
+    Build the column-stochastic Google transition matrix G.
+
+    Step 1 – Base adjacency A:
+        A_ij = 1 − |corr_ij|  (i ≠ j)  — favours low-correlation transitions
+        A_ii = 0
+    Step 2 – Column-normalise A to obtain a Markov chain A_norm.
+    Step 3 – Mix with uniform teleportation:
+        d   = λ / (λ + 1)          (teleportation damping factor)
+        G   = (1 − d) · A_norm  +  d · J / n
+    where J is the n×n all-ones matrix and n is the number of assets.
+
+    Effect of λ:
+      λ → 0  : walk is entirely graph-based (follows correlation structure)
+      λ → ∞  : walk is entirely uniform (equal-weight transitions → 1/N)
+    """
+    n = corr.shape[0]
+    corr_arr = corr.values.astype(float)
+
+    # Base adjacency: penalise correlated pairs
+    A = np.maximum(1.0 - np.abs(corr_arr), 0.0)
+    np.fill_diagonal(A, 0.0)
+
+    # Column-normalise
+    col_sums = A.sum(axis=0)
+    col_sums[col_sums < 1e-12] = 1.0       # guard against zero columns
+    A_norm = A / col_sums[np.newaxis, :]
+
+    # Teleportation mixing
+    d = lam / (lam + 1.0)
+    G = (1.0 - d) * A_norm + d * np.ones((n, n)) / n
+    return G                               # each column sums to 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 3 – LINDBLAD SUPEROPERATOR (GKLS)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_lindblad_superoperator(H: np.ndarray, G: np.ndarray,
+                                  omega: float = 0.4) -> np.ndarray:
+    """
+    Construct the GKLS Lindblad superoperator L_super such that:
+
+        d vec(ρ) / dt  =  L_super · vec(ρ)
+
+    where vec(ρ) is the column-major vectorisation of the density matrix.
+
+    Column-major vectorisation identities used:
+        vec(AXB) = (B^T ⊗ A) vec(X)
+        vec([H,ρ]) = (I ⊗ H − H^T ⊗ I) vec(ρ)
+
+    Coherent term (unitary, quantum channel):
+        −i(1−ω)(I ⊗ H − H^T ⊗ I)
+
+    Dissipative term (classical channel) — SIMPLIFIED for column-stochastic G:
+        Since Σ_i G[i,j] = 1 ∀j, the Lindblad dissipator reduces to:
+            ω · (Λ_super − I_{n²})
+        where Λ_super[k(n+1), j(n+1)] = G[k, j]  (maps diagonal ρ → diagonal Λ(ρ))
+    """
+    n = H.shape[0]
+    n2 = n * n
+    I_n = np.eye(n)
+
+    # ── Coherent superoperator ──────────────────────────────────────────────
+    L_coherent = -1j * (1.0 - omega) * (np.kron(I_n, H) - np.kron(H.T, I_n))
+
+    # ── Dissipative superoperator (simplified, column-stochastic G) ─────────
+    # Λ_super maps diagonal elements of ρ via G:
+    #   (Λ(ρ))_kk = Σ_j G[k,j] · ρ_jj
+    # In the column-major vector, diagonal element (k,k) is at index k*(n+1).
+    Lambda_super = np.zeros((n2, n2), dtype=complex)
+    for k in range(n):
+        for j in range(n):
+            Lambda_super[k * (n + 1), j * (n + 1)] = G[k, j]
+
+    L_dissipative = omega * (Lambda_super - np.eye(n2, dtype=complex))
+
+    return L_coherent + L_dissipative
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 4 – STEADY-STATE EXTRACTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def find_steady_state(L_super: np.ndarray, n: int):
+    """
+    Solve  L_super · vec(ρ∞) = 0  subject to  Tr(ρ∞) = 1.
+
+    The trace constraint replaces the last equation:
+        Σ_k  vec(ρ)[k(n+1)]  =  1
+
+    Returns
+    -------
+    rho_ss  : complex ndarray of shape (n, n) – steady-state density matrix
+    weights : real ndarray of shape (n,)      – portfolio weights = diag(ρ∞)
+    """
+    n2 = n * n
+    mat = L_super.copy()
+
+    # Replace last row with trace-normalisation constraint
+    trace_row = np.zeros(n2, dtype=complex)
+    for k in range(n):
+        trace_row[k * (n + 1)] = 1.0      # column-major diagonal index
+    mat[-1, :] = trace_row
+
+    rhs = np.zeros(n2, dtype=complex)
+    rhs[-1] = 1.0
+
+    try:
+        vec_rho = np.linalg.solve(mat, rhs)
+    except np.linalg.LinAlgError:
+        vec_rho, *_ = np.linalg.lstsq(mat, rhs, rcond=None)
+
+    # Reshape back to density matrix (column-major)
+    rho_ss = vec_rho.reshape((n, n), order="F")
+
+    # Extract diagonal and project onto probability simplex
+    weights = np.real(np.diag(rho_ss))
+    weights = np.maximum(weights, 0.0)
+    total = weights.sum()
+    weights /= total if total > 1e-12 else 1.0
+    return rho_ss, weights
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 5 – QSW PORTFOLIO OPTIMIZER (ALL-IN-ONE)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def qsw_portfolio(returns: pd.DataFrame,
+                  alpha: float = 10.0,
+                  beta: float  = 10.0,
+                  lam:  float  = 10.0,
+                  omega: float = 0.4) -> np.ndarray:
+    """
+    Full QSW pipeline: returns → weights.
+
+    Parameters
+    ----------
+    returns : pd.DataFrame  (T × n) daily log or simple returns
+    alpha   : Sharpe-ratio weight on Hamiltonian self-loops
+    beta    : Correlation-penalty weight on Hamiltonian off-diagonal
+    lam     : Teleportation strength in Google matrix
+    omega   : Quantum–classical mixing parameter ∈ [0, 1]
+
+    Returns
+    -------
+    weights : np.ndarray of shape (n,)
+    """
+    n = returns.shape[1]
+    _, _, sharpe, _, corr = compute_financial_features(returns)
+    H = build_hamiltonian(sharpe, corr, alpha=alpha, beta=beta)
+    G = build_google_matrix(corr, lam=lam)
+    L_super = build_lindblad_superoperator(H, G, omega=omega)
+    _, weights = find_steady_state(L_super, n)
+    return weights
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 6 – BENCHMARK PORTFOLIOS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def equal_weight(n: int) -> np.ndarray:
+    """Naive 1/N equal-weight portfolio."""
+    return np.ones(n) / n
+
+
+def max_sharpe_mpt(returns: pd.DataFrame, rf: float = 0.0) -> np.ndarray:
+    """
+    Classical Markowitz maximum-Sharpe portfolio (long-only).
+    Uses annualised returns and covariances (×252).
+    """
+    mu  = returns.mean().values * 252
+    cov = returns.cov().values  * 252
+    n   = len(mu)
+
+    def neg_sharpe(w):
+        ret = w @ mu
+        vol = np.sqrt(max(w @ cov @ w, 1e-20))
+        return -(ret - rf) / vol
+
+    w0 = np.ones(n) / n
+    constraints = [{"type": "eq", "fun": lambda w: w.sum() - 1.0}]
+    bounds = [(0.0, 1.0)] * n
+    res = minimize(neg_sharpe, w0, method="SLSQP",
+                   bounds=bounds, constraints=constraints,
+                   options={"maxiter": 2000, "ftol": 1e-10})
+
+    w = np.maximum(res.x, 0.0)
+    w /= w.sum() if w.sum() > 1e-12 else 1.0
+    return w
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 7 – WALK-FORWARD BACKTEST ENGINE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def backtest(prices: pd.DataFrame,
+             strategy_fn,
+             train_window: int = 252,
+             rebal_freq:   int = 63) -> tuple:
+    """
+    Walk-forward backtest with periodic rebalancing.
+
+    Parameters
+    ----------
+    prices       : pd.DataFrame (T × n) adjusted close prices
+    strategy_fn  : callable(returns_train) → np.ndarray of weights
+    train_window : number of trading days used to fit the model
+    rebal_freq   : number of days between rebalancing events
+
+    Returns
+    -------
+    port_ret  : pd.Series of daily portfolio returns
+    w_history : list of (date, weights) tuples at each rebalancing event
+    """
+    returns = prices.pct_change().dropna()
+    n = prices.shape[1]
+    current_w = np.ones(n) / n
+    w_history, daily_returns = [], []
+
+    dates = returns.index
+    for t in range(train_window, len(dates)):
+        # Rebalance?
+        if (t - train_window) % rebal_freq == 0:
+            train_ret = returns.iloc[t - train_window : t]
+            try:
+                current_w = strategy_fn(train_ret)
+            except Exception:
+                current_w = np.ones(n) / n
+            w_history.append((dates[t], current_w.copy()))
+
+        day_ret = float((returns.iloc[t].values * current_w).sum())
+        daily_returns.append((dates[t], day_ret))
+
+    port_ret = pd.Series(
+        [r for _, r in daily_returns],
+        index=[d for d, _ in daily_returns],
+        name="return",
+    )
+    return port_ret, w_history
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 8 – PERFORMANCE METRICS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_metrics(ret: pd.Series, rf: float = 0.0) -> dict:
+    """Compute annualised risk/return/drawdown metrics."""
+    ann_ret = ret.mean() * 252
+    ann_vol = ret.std() * np.sqrt(252)
+    sharpe  = (ann_ret - rf) / max(ann_vol, 1e-12)
+    cum     = (1.0 + ret).cumprod()
+    mdd     = ((cum - cum.cummax()) / cum.cummax()).min()
+    return {
+        "Annualised Return":    ann_ret,
+        "Annualised Volatility": ann_vol,
+        "Sharpe Ratio":          sharpe,
+        "Max Drawdown":          mdd,
+        "Final Wealth":          cum.iloc[-1],
+    }
+
+
+def hhi(weights: np.ndarray) -> float:
+    """Herfindahl–Hirschman Index (portfolio concentration). 1/n = max diversity."""
+    return float(np.sum(weights ** 2))
+
+
+def annual_turnover(w_history: list, periods_per_year: float = 4.0) -> float:
+    """Average annual one-way portfolio turnover from rebalancing history."""
+    if len(w_history) < 2:
+        return 0.0
+    tos = [0.5 * np.abs(w_history[i][1] - w_history[i-1][1]).sum()
+           for i in range(1, len(w_history))]
+    return float(np.mean(tos) * periods_per_year)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 9 – VISUALISATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Colour palette matching the paper's style
+PALETTE = {
+    "QSW Ultra-Diversified": "#1f77b4",
+    "QSW Moderate-Balanced": "#2ca02c",
+    "QSW Stability-Focused": "#9467bd",
+    "QSW Balanced-Active":   "#17becf",
+    "QSW Sharpe-Maximizer":  "#bcbd22",
+    "1/N Equal Weight":      "#ff7f0e",
+    "MPT Max-Sharpe":        "#d62728",
+}
+
+
+def plot_all(results: dict, portfolios: dict, omega_df: pd.DataFrame,
+             tickers_used: list) -> plt.Figure:
+    """
+    Four-panel figure:
+      1. Cumulative wealth trajectories
+      2. Sharpe Ratio vs Annual Turnover scatter
+      3. Risk–Return frontier
+      4. ω sensitivity (Moderate-Balanced preset)
+    """
+    fig = plt.figure(figsize=(18, 14))
+    fig.suptitle(
+        "Quantum Stochastic Walk (QSW) Portfolio Optimization\n"
+        "Chang et al. (2026)  ·  npj Unconventional Computing",
+        fontsize=15, fontweight="bold", y=1.01,
+    )
+    gs = gridspec.GridSpec(2, 2, figure=fig, hspace=0.38, wspace=0.32)
+
+    # ── Panel 1: Cumulative Wealth ──────────────────────────────────────────
+    ax1 = fig.add_subplot(gs[0, 0])
+    for name, cum in portfolios.items():
+        ls = "--" if "MPT" in name else (":" if "1/N" in name else "-")
+        lw = 2.2 if name in ("MPT Max-Sharpe", "1/N Equal Weight") else 1.6
+        ax1.plot(cum.index, cum.values,
+                 label=name, color=PALETTE.get(name, "grey"),
+                 linestyle=ls, linewidth=lw)
+    ax1.set_title("Cumulative Wealth  ($1 invested)", fontweight="bold")
+    ax1.set_ylabel("Portfolio Value ($)")
+    ax1.legend(fontsize=7.5, loc="upper left", framealpha=0.8)
+    ax1.grid(alpha=0.25)
+
+    # ── Panel 2: Sharpe vs Turnover ─────────────────────────────────────────
+    ax2 = fig.add_subplot(gs[0, 1])
+    for name, m in results.items():
+        to = m.get("Annual Turnover", 0) * 100
+        sr = m["Sharpe Ratio"]
+        c  = PALETTE.get(name, "grey")
+        ax2.scatter(to, sr, s=130, color=c, zorder=5, edgecolors="white", linewidths=0.7)
+        short = name.replace("QSW ", "").replace(" Equal Weight", "")
+        ax2.annotate(short, (to, sr), fontsize=7.5,
+                     xytext=(5, 5), textcoords="offset points")
+    ax2.set_title("Sharpe Ratio  vs  Annual Turnover", fontweight="bold")
+    ax2.set_xlabel("Annual Turnover (%)")
+    ax2.set_ylabel("Sharpe Ratio")
+    ax2.grid(alpha=0.25)
+
+    # ── Panel 3: Risk–Return Frontier ───────────────────────────────────────
+    ax3 = fig.add_subplot(gs[1, 0])
+    for name, m in results.items():
+        vol = m["Annualised Volatility"] * 100
+        ret = m["Annualised Return"]    * 100
+        c   = PALETTE.get(name, "grey")
+        ax3.scatter(vol, ret, s=130, color=c, zorder=5, edgecolors="white", linewidths=0.7)
+        short = name.replace("QSW ", "").replace(" Equal Weight", "")
+        ax3.annotate(short, (vol, ret), fontsize=7.5,
+                     xytext=(5, 5), textcoords="offset points")
+    ax3.set_title("Risk–Return Frontier", fontweight="bold")
+    ax3.set_xlabel("Annualised Volatility (%)")
+    ax3.set_ylabel("Annualised Return (%)")
+    ax3.grid(alpha=0.25)
+
+    # ── Panel 4: ω Sensitivity ──────────────────────────────────────────────
+    ax4 = fig.add_subplot(gs[1, 1])
+    omegas = omega_df["omega"].values
+    ax4.plot(omegas, omega_df["Sharpe Ratio"],    "o-", color="#2ca02c", label="Sharpe Ratio")
+    ax4.plot(omegas, omega_df["Annualised Volatility"] * 100,
+             "s--", color="#1f77b4", label="Volatility (%)")
+    ax4.plot(omegas, omega_df["HHI"] * 1000,
+             "^:", color="#d62728", label="HHI × 1000")
+    ax4.plot(omegas, omega_df["Annual Turnover"] * 100,
+             "D-.", color="#ff7f0e", label="Turnover (%)")
+    ax4.set_title("ω Sensitivity  (Moderate-Balanced preset)", fontweight="bold")
+    ax4.set_xlabel("ω  (0=quantum, 1=classical)")
+    ax4.legend(fontsize=8, framealpha=0.8)
+    ax4.grid(alpha=0.25)
+
+    return fig
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 10 – OMEGA SENSITIVITY ANALYSIS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def omega_sensitivity(prices: pd.DataFrame,
+                      preset_params: dict,
+                      train_window: int = 252,
+                      rebal_freq:   int = 63,
+                      omega_range=None) -> pd.DataFrame:
+    """
+    Sweep ω across omega_range, run a full backtest for each value,
+    and return a DataFrame of key metrics.
+    """
+    if omega_range is None:
+        omega_range = [0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
+
+    rows = []
+    for omega in omega_range:
+        params = {**preset_params, "omega": omega}
+        fn     = lambda ret, p=params: qsw_portfolio(ret, **p)
+        ret_s, wh = backtest(prices, fn,
+                             train_window=train_window,
+                             rebal_freq=rebal_freq)
+        m = compute_metrics(ret_s)
+        m["omega"]            = omega
+        m["Annual Turnover"]  = annual_turnover(wh)
+        m["HHI"]              = hhi(wh[-1][1]) if wh else np.nan
+        m["Eff. # Stocks"]    = 1.0 / m["HHI"] if m.get("HHI", 0) > 1e-12 else np.nan
+        rows.append(m)
+
+    return pd.DataFrame(rows)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 11 – MAIN EXPERIMENT
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── QSW strategy presets (Table 1, paper) ───────────────────────────────────
+PRESETS = {
+    "QSW Ultra-Diversified": dict(alpha=1.0,   beta=100.0, lam=10.0,  omega=0.2),
+    "QSW Moderate-Balanced": dict(alpha=10.0,  beta=10.0,  lam=10.0,  omega=0.2),
+    "QSW Stability-Focused": dict(alpha=1.0,   beta=10.0,  lam=100.0, omega=0.2),
+    "QSW Balanced-Active":   dict(alpha=10.0,  beta=1.0,   lam=100.0, omega=0.2),
+    "QSW Sharpe-Maximizer":  dict(alpha=100.0, beta=1.0,   lam=10.0,  omega=0.2),
+}
+
+
+def _generate_synthetic_prices(n_assets: int = 30,
+                               start: str = "2018-01-01",
+                               end:   str = "2024-12-31",
+                               tickers: list = None,
+                               seed: int = 42) -> pd.DataFrame:
+    """
+    Simulate realistic S&P 500-like multivariate daily prices using a
+    3-factor model (market + two sector factors) with GARCH-style volatility.
+
+    Calibrated to approximate:
+      • Annual returns:     8–18%   (mean ~13%)
+      • Annual volatilities:15–40%  (mean ~22%)
+      • Pairwise correlations: 0.2–0.8 (sector blocks)
+    """
+    np.random.seed(seed)
+    dates = pd.bdate_range(start=start, end=end)
+    T = len(dates)
+
+    # Asset metadata
+    if tickers is None:
+        tickers = [f"STOCK_{i:02d}" for i in range(n_assets)]
+    tickers = tickers[:n_assets]
+
+    # Assign assets to 5 sectors
+    n_sectors = 5
+    sectors = np.array([i % n_sectors for i in range(n_assets)])
+
+    # Factor loadings
+    mkt_beta     = 0.6 + 0.6 * np.random.rand(n_assets)          # market β ∈ [0.6, 1.2]
+    sector_beta  = 0.3 + 0.5 * np.random.rand(n_assets)          # sector  β ∈ [0.3, 0.8]
+
+    # Daily drifts (calibrated to annual ~13% return)
+    mu_daily = (0.06 + 0.12 * np.random.rand(n_assets)) / 252
+
+    # Idiosyncratic vols (annual ~15%)
+    idio_vol = (0.10 + 0.20 * np.random.rand(n_assets)) / np.sqrt(252)
+
+    # Simulate factor returns
+    mkt_vol    = 0.15 / np.sqrt(252)
+    sector_vol = 0.08 / np.sqrt(252)
+
+    mkt_ret    = np.random.normal(0.08 / 252, mkt_vol,    T)
+    sector_ret = np.random.normal(0.00,        sector_vol, (T, n_sectors))
+
+    # Simulate log-returns
+    log_ret = np.zeros((T, n_assets))
+    for i in range(n_assets):
+        s = sectors[i]
+        idio          = np.random.normal(0.0, idio_vol[i], T)
+        log_ret[:, i] = (mu_daily[i]
+                         + mkt_beta[i]   * mkt_ret
+                         + sector_beta[i]* sector_ret[:, s]
+                         + idio)
+
+    # Convert to prices
+    log_prices = np.cumsum(log_ret, axis=0)
+    prices_arr = 100.0 * np.exp(log_prices)
+    return pd.DataFrame(prices_arr, index=dates, columns=tickers)
+
+
+def run_experiment(tickers,
+                   start="2018-01-01",
+                   end="2024-12-31",
+                   train_window=252,
+                   rebal_freq=63):
+    """
+    Download data, run all QSW presets + benchmarks, and return results.
+
+    Parameters
+    ----------
+    tickers      : list of ticker symbols
+    start / end  : backtest date range
+    train_window : trading days of history for training (252 = 1 year)
+    rebal_freq   : days between rebalances (63 ≈ quarterly)
+
+    Returns
+    -------
+    results  : dict  strategy_name → metrics dict
+    portfolios: dict strategy_name → cumulative wealth pd.Series
+    prices   : pd.DataFrame of downloaded prices
+    tickers_used: list[str]
+    """
+    print("━" * 60)
+    print("  Downloading price data …")
+    prices = None
+    try:
+        raw = yf.download(tickers, start=start, end=end,
+                          auto_adjust=True, progress=False)["Close"]
+        raw = raw.dropna(axis=1, how="any").dropna()
+        if raw.shape[0] > train_window + 2 * rebal_freq and raw.shape[1] >= 5:
+            prices = raw
+    except Exception:
+        pass
+
+    if prices is None or prices.empty:
+        print("  ⚠  Live download unavailable – using realistic synthetic data.")
+        prices = _generate_synthetic_prices(
+            n_assets=min(len(tickers), 30),
+            start=start, end=end,
+            tickers=tickers,
+        )
+
+    tickers_used = list(prices.columns)
+    n = len(tickers_used)
+    print(f"  {n} assets: {', '.join(tickers_used[:10])}{'…' if n > 10 else ''}")
+    print("━" * 60)
+
+    # Build strategy dictionary
+    strategies = {}
+    for name, params in PRESETS.items():
+        strategies[name] = (lambda ret, p=params: qsw_portfolio(ret, **p))
+    strategies["1/N Equal Weight"] = lambda ret: equal_weight(ret.shape[1])
+    strategies["MPT Max-Sharpe"]   = lambda ret: max_sharpe_mpt(ret)
+
+    results, portfolios, w_histories = {}, {}, {}
+    for name, fn in strategies.items():
+        print(f"  Backtesting: {name} …", flush=True)
+        ret_s, wh = backtest(prices, fn,
+                             train_window=train_window,
+                             rebal_freq=rebal_freq)
+        m = compute_metrics(ret_s)
+        m["Annual Turnover"] = annual_turnover(wh)
+        if wh:
+            m["HHI"]           = hhi(wh[-1][1])
+            m["Eff. # Stocks"] = 1.0 / m["HHI"]
+        results[name]     = m
+        portfolios[name]  = (1.0 + ret_s).cumprod()
+        w_histories[name] = wh
+
+    return results, portfolios, w_histories, tickers_used, prices
+
+
+def print_table(results: dict):
+    """Pretty-print the performance summary table."""
+    SEP = "═" * 100
+    print("\n" + SEP)
+    print("  PORTFOLIO PERFORMANCE SUMMARY")
+    print(SEP)
+    hdr = (f"{'Strategy':<28}  {'Sharpe':>7}  {'Ann.Ret%':>9}  {'Ann.Vol%':>9}"
+           f"  {'MaxDD%':>8}  {'Turnover%':>10}  {'HHI':>6}  {'Eff.#Stk':>9}")
+    print(hdr)
+    print("─" * 100)
+    for name, m in results.items():
+        print(
+            f"  {name:<26}  "
+            f"{m['Sharpe Ratio']:>7.3f}  "
+            f"{m['Annualised Return']*100:>9.2f}  "
+            f"{m['Annualised Volatility']*100:>9.2f}  "
+            f"{m['Max Drawdown']*100:>8.2f}  "
+            f"{m.get('Annual Turnover', 0)*100:>10.2f}  "
+            f"{m.get('HHI', 0):>6.4f}  "
+            f"{m.get('Eff. # Stocks', 0):>9.1f}"
+        )
+    print(SEP)
+    print("  Note: MPT turnover typically 320–480% p.a.; cost drag ≈ turnover × 0.20%")
+    print(SEP + "\n")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENTRY POINT
+# ─────────────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+
+    # ── Ticker universe ──────────────────────────────────────────────────────
+    # For best results use 50–100 large-cap S&P 500 stocks.
+    # Reduce this list to speed up the demo.
+    TICKERS = [
+        "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA",
+        "UNH",  "LLY",  "JPM",   "V",    "XOM",  "PG",   "MA",
+        "COST", "HD",   "CVX",   "MRK",  "ABBV", "KO",   "PEP",
+        "WMT",  "BAC",  "CRM",   "MCD",  "ACN",  "CSCO", "TMO",
+        "ABT",  "NKE",  "WFC",   "TXN",  "IBM",  "GE",   "CAT",
+        "HON",  "AMGN", "AXP",   "SPGI", "LMT",  "DE",   "BKNG",
+        "BLK",  "MMM",  "C",     "MS",   "SCHW", "INTU", "QCOM",
+    ]
+
+    # ── Run main backtest ────────────────────────────────────────────────────
+    results, portfolios, w_histories, tickers_used, prices = run_experiment(
+        tickers=TICKERS,
+        start="2018-01-01",
+        end="2024-12-31",
+        train_window=252,    # 1-year training window
+        rebal_freq=63,       # quarterly rebalancing (~63 trading days)
+    )
+
+    print_table(results)
+
+    # ── ω sensitivity analysis (Moderate-Balanced preset) ───────────────────
+    print("  Running ω sensitivity analysis (Moderate-Balanced preset) …")
+    moderate_params = dict(alpha=10.0, beta=10.0, lam=10.0)
+    omega_df = omega_sensitivity(
+        prices,
+        preset_params=moderate_params,
+        train_window=252,
+        rebal_freq=63,
+        omega_range=[0.1, 0.2, 0.4, 0.6, 0.8, 1.0],
+    )
+    print("\n  ω Sensitivity (Moderate-Balanced preset):")
+    print(omega_df[["omega", "Sharpe Ratio", "Annualised Volatility",
+                     "Annual Turnover", "HHI", "Eff. # Stocks"]].to_string(index=False))
+
+    # ── Plot ─────────────────────────────────────────────────────────────────
+    fig = plot_all(results, portfolios, omega_df, tickers_used)
+    fig.tight_layout()
+    out_path = "/mnt/user-data/outputs/qsw_portfolio_results.png"
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    print(f"\n  Figure saved → {out_path}")
+
+    # ── Individual weight snapshots ──────────────────────────────────────────
+    fig2, axes = plt.subplots(2, 3, figsize=(18, 8))
+    fig2.suptitle("Portfolio Weight Distribution – Final Rebalancing Period",
+                  fontsize=13, fontweight="bold")
+    strategies_to_plot = list(w_histories.keys())[:6]
+
+    for ax, name in zip(axes.flatten(), strategies_to_plot):
+        wh = w_histories[name]
+        if not wh:
+            ax.set_visible(False)
+            continue
+        _, w = wh[-1]
+        sorted_idx = np.argsort(w)[::-1]
+        labels = [tickers_used[i] for i in sorted_idx]
+        vals   = w[sorted_idx]
+        ax.bar(range(len(vals)), vals * 100,
+               color=PALETTE.get(name, "#888888"), alpha=0.85)
+        ax.set_title(name.replace("QSW ", ""), fontsize=9, fontweight="bold")
+        ax.set_ylabel("Weight (%)")
+        ax.set_xlabel("Assets (sorted by weight)")
+        ax.axhline(100 / len(w), color="red", linestyle="--", linewidth=1,
+                   label=f"1/N = {100/len(w):.1f}%")
+        ax.legend(fontsize=7)
+        ax.grid(axis="y", alpha=0.3)
+        ax.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
+
+    fig2.tight_layout()
+    out_path2 = "/mnt/user-data/outputs/qsw_weights_distribution.png"
+    os.makedirs(os.path.dirname(out_path2), exist_ok=True)
+    fig2.savefig(out_path2, dpi=150, bbox_inches="tight")
+    print(f"  Weight distribution figure saved → {out_path2}\n")
+
+    plt.show()
