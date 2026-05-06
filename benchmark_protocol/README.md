@@ -35,30 +35,37 @@ Pick somewhere between m and M assets; allocate continuous weights. Solved here 
 
 ---
 
-## 2. Frozen instance set
+## 2. Instance set
 
-All benchmarks run on the 57 JSON files in `data/instances/`.
+All benchmarks run on the 57 JSON files in `data/instances/`. `mu` and
+`sigma` are annualized from real auto-adjusted close prices over the
+in-sample window 2022-01-01 .. 2024-12-31. Instances with N <= 25 draw
+from the QUBO universe (`data/prices/prices_daily.csv`); N > 25 draw from
+the MIQP universe (`data/prices/prices_miqp_daily.csv`). To regenerate
+(deterministic, seeded per instance id), run
+`python scripts/regenerate_instances_from_prices.py`.
 
 | Bucket | IDs | N range | Notes |
 |---|---|---|---|
-| tiny | `syn_tiny_0000` .. `syn_tiny_0014` | 4–5 | exact reachable |
-| small | `syn_small_0015` .. `syn_small_0029` | 6–8 | exact + quantum overlap |
-| n7_gap | `syn_n7_gap_0000` .. `syn_n7_gap_0004` | 7 | hard-gap stress cases |
-| medium | `syn_medium_0030` .. `syn_medium_0041` | 9–17 | classical + MPS quantum |
-| large | `syn_large_0042` .. `syn_large_0051` | 18–49 | classical-only |
+| tiny | `tiny_0000` .. `tiny_0014` | 4–6 | exact reachable |
+| small | `small_0015` .. `small_0029` | 8–12 | exact + quantum overlap |
+| n7_gap | `n7_gap_0000` .. `n7_gap_0004` | 7 | hard-gap stress cases |
+| medium | `medium_0030` .. `medium_0041` | 16–25 | classical + MPS quantum |
+| large | `large_0042` .. `large_0051` | 32–49 | classical-only |
 
 Each file is plain JSON — open one in any text editor:
 
 ```json
 {
-  "instance_id": "syn_tiny_0000",
+  "instance_id": "tiny_0000",
   "N": 4,
   "K": 2,
   "q": 1.046,
-  "asset_tickers": ["SYN_000", "SYN_001", "SYN_002", "SYN_003"],
-  "date_range": ["synthetic", "synthetic"],
-  "mu": [0.189, 0.069, 0.245, 0.202],
-  "sigma": [[...], [...], [...], [...]]
+  "asset_tickers": ["GOOG", "META", "PG", "NFLX"],
+  "date_range": ["2022-01-01", "2024-12-31"],
+  "mu":    [0.21, 0.18, 0.07, 0.16],
+  "sigma": [[...], [...], [...], [...]],
+  "_source": {"universe": "qubo", "window": ["2022-01-01", "2024-12-31"]}
 }
 ```
 
@@ -66,14 +73,17 @@ Load with:
 
 ```python
 from benchmark_protocol import instances
-inst = instances.load("syn_tiny_0000")
+inst = instances.load("tiny_0000")
 inst.mu        # numpy array, shape (N,)
 inst.sigma     # numpy array, shape (N, N)
 inst.K         # cardinality
 inst.q         # risk aversion
 ```
 
-Never regenerate the JSONs. New instances only for ablations, with a different prefix (e.g. `abl_*`).
+Regeneration is deterministic via a per-id seed
+(`scripts/regenerate_instances_from_prices.py`); pulling new prices may shift
+mu/sigma slightly. New instance families for ablations should use a
+different prefix (e.g. `abl_*`).
 
 ---
 

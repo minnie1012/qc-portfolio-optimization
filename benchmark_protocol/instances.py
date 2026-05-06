@@ -1,10 +1,16 @@
-"""Canonical frozen instance set. JSON-based, no pickle dependency.
+"""Benchmark instance set. JSON-based, no pickle dependency.
+
+mu and sigma are annualized from real auto-adjusted close prices over the
+in-sample window (2022-01-01..2024-12-31). N <= 25 instances draw from the
+QUBO universe (data/prices/prices_daily.csv), N > 25 from the MIQP universe
+(data/prices/prices_miqp_daily.csv). Regenerate with
+scripts/regenerate_instances_from_prices.py.
 
 Each instance is one JSON file in data/instances/. Open one in any text
 editor to see exactly what's in it. To load programmatically:
 
     from benchmark_protocol import instances
-    inst = instances.load("syn_tiny_0000")
+    inst = instances.load("tiny_0000")
     inst.mu, inst.sigma, inst.K, inst.q   # ready to feed a solver
 """
 from __future__ import annotations
@@ -18,11 +24,11 @@ import numpy as np
 INSTANCE_DIR = Path(__file__).resolve().parent.parent / "data" / "instances"
 
 BUCKETS: dict[str, list[str]] = {
-    "tiny":    [f"syn_tiny_{i:04d}"   for i in range(0, 15)],
-    "small":   [f"syn_small_{i:04d}"  for i in range(15, 30)],
-    "medium":  [f"syn_medium_{i:04d}" for i in range(30, 42)],
-    "large":   [f"syn_large_{i:04d}"  for i in range(42, 52)],
-    "n7_gap":  [f"syn_n7_gap_{i:04d}" for i in range(0, 5)],
+    "tiny":    [f"tiny_{i:04d}"   for i in range(0, 15)],
+    "small":   [f"small_{i:04d}"  for i in range(15, 30)],
+    "medium":  [f"medium_{i:04d}" for i in range(30, 42)],
+    "large":   [f"large_{i:04d}"  for i in range(42, 52)],
+    "n7_gap":  [f"n7_gap_{i:04d}" for i in range(0, 5)],
 }
 
 SUBSETS = {

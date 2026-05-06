@@ -1,7 +1,7 @@
 """Template for a new solver. Copy, rename, fill in the TODOs.
 
 Usage:
-    python -m benchmark_protocol.solver_template --algo my_solver --instance syn_tiny_0000
+    python -m benchmark_protocol.solver_template --algo my_solver --instance tiny_0000
 """
 from __future__ import annotations
 
