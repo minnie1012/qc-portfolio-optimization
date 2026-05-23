@@ -668,8 +668,19 @@ def run_experiment(tickers,
     print("  Downloading price data …")
     prices = None
     try:
-        raw = yf.download(tickers, start=start, end=end,
-                          auto_adjust=True, progress=False)["Close"]
+        import signal
+
+        def _timeout_handler(signum, frame):
+            raise TimeoutError
+
+        signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(10)  # give yfinance 10 seconds before falling back
+        try:
+            raw = yf.download(tickers, start=start, end=end,
+                              auto_adjust=True, progress=False)["Close"]
+        finally:
+            signal.alarm(0)  # cancel alarm regardless of outcome
+
         raw = raw.dropna(axis=1, how="any").dropna()
         if raw.shape[0] > train_window + 2 * rebal_freq and raw.shape[1] >= 5:
             prices = raw
