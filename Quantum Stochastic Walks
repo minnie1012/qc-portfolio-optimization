@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from scipy.optimize import minimize
+from scipy.linalg import expm
 import yfinance as yf
 import os
 
@@ -165,6 +166,83 @@ def build_lindblad_superoperator(H: np.ndarray, G: np.ndarray,
     L_dissipative = omega * (Lambda_super - np.eye(n2, dtype=complex))
 
     return L_coherent + L_dissipative
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECTION 3b – KRAUS OPERATORS (Eq. 11, Chang et al. 2026)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_kraus_operators(
+    G: np.ndarray,
+    H: np.ndarray,
+    omega: float,
+    dt: float = 0.1,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Build the approximate Kraus operators for one GKLS time step.
+
+    The GKLS master equation (Eq. 4) is discretised to first order in Δt:
+
+        ρ(t+Δt) = K0 ρ K0† + Σ_{i≠j} Kij ρ Kij†
+
+    Jump operators (one per ordered asset pair, extremely sparse):
+
+        Kij = γij |i⟩⟨j|,   γij = sqrt(1 − exp(−ω · G_ij · Δt))
+
+    These are returned compactly as the n×n matrix
+
+        Γ_ij = γij²  =  1 − exp(−ω · G_ij · Δt)
+
+    because the dissipative update reduces to a matrix-vector product
+    (Eq. 13):  Σ_{ij} Kij ρ Kij† = diag(Γ @ diag(ρ))
+
+    No-jump operator (coherent + trace-preserving correction, Eq. 11):
+
+        K0 = diag(sqrt(1 − col_sums(Γ))) · exp(−i(1−ω) H Δt)
+
+    satisfying  K0†K0 + Σ_{ij} Kij†Kij = I  to O(Δt).
+
+    Parameters
+    ----------
+    G     : (n, n) Google / transition-rate matrix, column-stochastic,
+            with c_ij = G_ij as in Eq. (4).  Built from build_google_matrix.
+    H     : (n, n) Hermitian Hamiltonian.  Built from build_hamiltonian.
+    omega : quantum-classical mixing parameter ∈ (0, 1].
+            ω→0: pure coherent walk; ω→1: pure classical diffusion.
+    dt    : time step Δt for the first-order discretisation.
+
+    Returns
+    -------
+    K0    : (n, n) complex ndarray — the coherent no-jump Kraus operator.
+    Gamma : (n, n) real ndarray — Γ_ij = γ²_ij, the squared jump amplitudes.
+            Individual jump operators recover as Kij = sqrt(Γ[i,j]) * |i><j|.
+
+    Usage (one step of Algorithm 1)
+    --------------------------------
+    K0, Gamma = build_kraus_operators(G, H, omega, dt)
+    rho_tilde = K0 @ rho @ K0.conj().T          # coherent update
+    P         = np.diag(rho_tilde)               # diagonal occupancies
+    diag_new  = Gamma @ P                        # dissipative redistribution
+    rho_next  = rho_tilde - np.diag(np.diag(rho_tilde)) + np.diag(diag_new)
+    rho_next /= np.trace(rho_next)               # re-normalise
+    """
+    n = G.shape[0]
+
+    # ── Jump amplitudes: Γ_ij = 1 − exp(−ω G_ij Δt) ──────────────────────
+    Gamma = 1.0 - np.exp(-omega * G * dt)        # (n, n), all entries in [0,1]
+
+    # ── Trace-preserving weight for K0 ────────────────────────────────────
+    # Σ_i Kij†Kij = diag(col_sums(Γ))  →  K0†K0 = diag(1 − col_sums(Γ))
+    col_sums = Gamma.sum(axis=0)                 # (n,)
+    lambda_diag = np.clip(1.0 - col_sums, 0.0, 1.0)
+
+    # ── Coherent unitary: exp(−i(1−ω) H Δt) ──────────────────────────────
+    U = expm(-1j * (1.0 - omega) * H * dt)      # (n, n) unitary
+
+    # ── No-jump Kraus operator: K0 = diag(sqrt(λ)) · U ───────────────────
+    K0 = np.diag(np.sqrt(lambda_diag)) @ U      # (n, n) complex
+
+    return K0, Gamma
 
 
 # ─────────────────────────────────────────────────────────────────────────────
