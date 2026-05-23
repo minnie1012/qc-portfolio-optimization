@@ -53,6 +53,39 @@ def build_hamiltonian(sharpe: pd.Series, corr: pd.DataFrame,
     return H  # real symmetric → Hermitian
 
 
+def build_weight_matrix(
+    SR: np.ndarray,
+    Sigma: np.ndarray,
+    alpha: float = 1.0,
+    beta: float = 1.0,
+    lam: float = 1.0,
+) -> np.ndarray:
+    """
+    Build the weight matrix W defined by:
+
+        W_ij = exp(alpha * SR_j  -  beta * Sigma_ij)   if i != j
+        W_ii = exp(lam   * SR_i)                        if i == j
+
+    Parameters
+    ----------
+    SR    : (n,) array of Sharpe ratios, one per asset
+    Sigma : (n, n) covariance matrix
+    alpha : scaling factor for SR_j in off-diagonal entries
+    beta  : scaling factor for Sigma_ij in off-diagonal entries
+    lam   : scaling factor for SR_i on diagonal entries
+
+    Returns
+    -------
+    W : (n, n) weight matrix
+    """
+    SR = np.asarray(SR, dtype=float)
+    Sigma = np.asarray(Sigma, dtype=float)
+    # Off-diagonal formula applied to every entry first, then overwrite diagonal
+    W = np.exp(alpha * SR[np.newaxis, :] - beta * Sigma)
+    np.fill_diagonal(W, np.exp(lam * SR))
+    return W
+
+
 def build_google_matrix(corr: pd.DataFrame, lam: float = 10.0) -> np.ndarray:
     """
     Build the column-stochastic Google transition matrix G.
