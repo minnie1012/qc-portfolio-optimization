@@ -1,0 +1,58 @@
+{
+  "n_bonds": 16,
+  "reps": 2,
+  "shots": 1024,
+  "true_optimum": 16733.202020209144,
+  "true_x": [
+    0,
+    0,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0
+  ],
+  "alpha_sweep": {
+    "0.1": {
+      "raw_gap": 14.211684731117401,
+      "polished_gap": 0.0
+    },
+    "0.2": {
+      "raw_gap": 35.380637290936356,
+      "polished_gap": 2.1741079816630594e-14
+    },
+    "1.0": {
+      "raw_gap": 28.912870080341584,
+      "polished_gap": 0.0
+    }
+  },
+  "ansatz_comparison": {
+    "TwoLocal-bilinear": {
+      "raw_gap": 14.211684731117401,
+      "polished_gap": 0.0,
+      "elapsed_s": 17.757607460021973
+    },
+    "TwoLocal-colored": {
+      "raw_gap": 2.1741079816630594e-14,
+      "polished_gap": 2.1741079816630594e-14,
+      "elapsed_s": 23.553991317749023
+    },
+    "BFCD-bilinear": {
+      "raw_gap": 6.7817502011988715,
+      "polished_gap": 0.0,
+      "elapsed_s": 47.98279523849487
+    }
+  },
+  "classical_baseline_gap": 0.0,
+  "classical_elapsed_s": 0.16328978538513184,
+  "paper_target_gap_pct": 0.49
+}
