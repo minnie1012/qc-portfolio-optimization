@@ -1,0 +1,48 @@
+{
+  "algorithm": "qsw",
+  "algorithm_version": "0.1.0",
+  "instance_id": "small_0017",
+  "seed": 42,
+  "objective_value": 0.07499214869822865,
+  "bitstring": [
+    0.0,
+    0.0,
+    0.3333332694901248,
+    0.3333334126448793,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.3333333178649958
+  ],
+  "feasible": true,
+  "approx_ratio": null,
+  "wall_time_seconds": 0.0005758229999628384,
+  "optimizer_iters": null,
+  "num_circuit_evaluations": null,
+  "convergence_history": [],
+  "qubit_count": null,
+  "circuit_depth": null,
+  "two_qubit_gate_count": null,
+  "t_gate_count": null,
+  "total_gate_count": null,
+  "shots": null,
+  "backend": null,
+  "transpile_optimization_level": null,
+  "hyperparameters": {
+    "problem_variant": "miqp",
+    "omega": 0.1,
+    "alpha_damp": 0.85
+  },
+  "initial_params": null,
+  "final_params": null,
+  "env": {
+    "python": "3.12.1",
+    "platform": "Linux-6.8.0-1044-azure-x86_64-with-glibc2.39",
+    "numpy": "2.4.6",
+    "scipy": "1.17.1"
+  },
+  "timestamp_utc": "2026-05-24T22:51:37.807757+00:00",
+  "git_commit": "n/a",
+  "schema_version": "1.0"
+}
