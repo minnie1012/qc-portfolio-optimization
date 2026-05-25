@@ -5,7 +5,7 @@ import pandas as pd
 import yfinance as yf
 import numpy as np
 
-def backtesting(stocks, weights, risk_free=0.0456/252):
+def backtesting(stocks, weights, risk_free=0.0456):
   train = yf.download(stocks, start="2022-01-01", end="2024-12-31")
   test = yf.download(stocks, start="2025-01-01", end="2025-12-31")
   backtest_data = pd.DataFrame(test['Close'])
