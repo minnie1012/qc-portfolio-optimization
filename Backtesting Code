@@ -1,0 +1,21 @@
+You guys can use this code to backtest. Once you run your algorithm and get the weight vector, make a list of the stocks your algorithm chose and a list of the weights for each stock. 
+Then you can input the list of stocks and the list of weights and this will calculate the sharpe ration for your portfolio. 
+
+import pandas as pd
+import yfinance as yf
+import numpy as np
+
+def backtesting(stocks, weights, risk_free=0.0456/252):
+  train = yf.download(stocks, start="2022-01-01", end="2024-12-31")
+  test = yf.download(stocks, start="2025-01-01", end="2025-12-31")
+  backtest_data = pd.DataFrame(test['Close'])
+  train = pd.DataFrame(train['Close'])
+  cov = train.cov()
+  weight_arr = np.array(weights)
+  risk = np.dot(np.dot(weight_arr.T, cov), weight_arr)
+  returns = 0
+  for i in range(len(stocks)):
+    temp = weights[i]*(backtest_data[stocks[i]].iloc[-1] - backtest_data[stocks[i]].iloc[0])
+    returns += temp
+  sharpe = (returns - risk_free)/risk
+  return sharpe
