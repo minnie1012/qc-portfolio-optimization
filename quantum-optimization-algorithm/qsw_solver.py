@@ -160,3 +160,27 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+import pandas as pd
+import yfinance as yf
+import numpy as np
+
+df = yf.download(tickers, start="2020-01-01", end="2022-12-31")
+real_qubo_full = pd.DataFrame(df['Close'])
+
+split_index = int(0.8*len(real_qubo_full))
+
+train, test = real_qubo_full.iloc[0:split_index], real_qubo_full.iloc[split_index:]
+
+weights = qsw_total(train,8)
+weights = dict(weights)
+stocks = [ticker for ticker in weights]
+percents = [weights[ticker] for ticker in weights]
+percents = np.array(percents)
+percents = percents*np.sum(percents)
+
+returns = 0
+for i in range(len(stocks)):
+  temp = percents[i]*(test[stocks[i]].iloc[-1] - test[stocks[i]].iloc[0])
+  returns += temp
+print(returns)
