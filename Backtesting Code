@@ -10,12 +10,15 @@ def backtesting(stocks, weights, risk_free=0.0456):
   test = yf.download(stocks, start="2025-01-01", end="2025-12-31")
   backtest_data = pd.DataFrame(test['Close'])
   train = pd.DataFrame(train['Close'])
-  cov = train.cov()
   weight_arr = np.array(weights)
-  risk = np.dot(np.dot(weight_arr.T, cov), weight_arr)
-  returns = 0
-  for i in range(len(stocks)):
-    temp = weights[i]*(backtest_data[stocks[i]].iloc[-1] - backtest_data[stocks[i]].iloc[0])
-    returns += temp
-  sharpe = (returns - risk_free)/risk
+  ret = train.pct_change().dropna()
+  cov = ret.cov()*252
+  risk = np.sqrt(np.dot(np.dot(weight_arr.T, cov), weight_arr))
+  init = np.array([backtest_data[stocks[i]].iloc[0] for i in range(len(stocks))])
+  final = np.array([backtest_data[stocks[i]].iloc[-1] for i in range(len(stocks))])
+  returns = (final-init)/init
+  profit = np.dot(returns, weight_arr)
+  sharpe = (profit-risk_free)/risk
   return sharpe
+
+backtesting(stocks, percents)
