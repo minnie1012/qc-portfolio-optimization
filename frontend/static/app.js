@@ -22,6 +22,11 @@ const ALGO_COLORS = {
 };
 const colorFor = (algo) => ALGO_COLORS[algo] || '#8a97ad';
 
+const ALGO_DISPLAY = {
+  warm_start_qaoa_saksham: 'warm_start_qaoa',
+};
+const displayAlgo = (algo) => ALGO_DISPLAY[algo] || algo;
+
 const state = {
   instances: [],
   results: [],
@@ -31,7 +36,12 @@ const state = {
   algoFilter: '',
   bucketFilter: '',
   table: null,
+  comparison: null,
+  cmpInstance: '',
+  cmpTable: null,
 };
+
+const TYPE_COLOR = { classical: '#ffb86b', quantum: '#7cc4ff' };
 
 async function fetchJSON(url) {
   const r = await fetch(url);
@@ -54,17 +64,20 @@ function feasibilityTag(f) {
 }
 
 async function init() {
-  const [instances, results] = await Promise.all([
+  const [instances, results, comparison] = await Promise.all([
     fetchJSON('/api/instances'),
     fetchJSON('/api/results'),
+    fetchJSON('/api/comparison'),
   ]);
   state.instances = instances;
   state.results = results;
+  state.comparison = comparison;
 
   populateKPIs();
   populateControls();
   buildTable();
   drawScatter();
+  setupComparison();
 
   if (instances.length) {
     document.getElementById('instance-select').value = instances[0].instance_id;
@@ -100,7 +113,7 @@ function populateControls() {
   algos.forEach((a) => {
     const opt = document.createElement('option');
     opt.value = a;
-    opt.textContent = a;
+    opt.textContent = displayAlgo(a);
     algoSel.appendChild(opt);
   });
   algoSel.addEventListener('change', (e) => {
@@ -213,11 +226,11 @@ function drawWeights(inst, results) {
     .filter((r) => Array.isArray(r.bitstring) && r.bitstring.length === inst.N)
     .map((r) => ({
       type: 'bar',
-      name: r.algorithm,
+      name: displayAlgo(r.algorithm),
       x: inst.asset_tickers,
       y: normalizeWeights(r.bitstring),
       marker: { color: colorFor(r.algorithm) },
-      hovertemplate: `${r.algorithm}<br>%{x}: %{y:.3f}<extra></extra>`,
+      hovertemplate: `${displayAlgo(r.algorithm)}<br>%{x}: %{y:.3f}<extra></extra>`,
     }));
   if (!traces.length) {
     Plotly.purge('chart-weights');
@@ -245,7 +258,8 @@ function drawConvergence(results) {
   }
   const traces = withHist.map((r) => {
     const p = r.hyperparameters && r.hyperparameters.p;
-    const label = p !== undefined ? `${r.algorithm} (p=${p})` : r.algorithm;
+    const name = displayAlgo(r.algorithm);
+    const label = p !== undefined ? `${name} (p=${p})` : name;
     return {
       type: 'scatter',
       mode: 'lines+markers',
@@ -274,11 +288,11 @@ function drawScatter() {
   const traces = Object.entries(grouped).map(([algo, items]) => ({
     type: 'scatter',
     mode: 'markers',
-    name: algo,
+    name: displayAlgo(algo),
     x: items.map((r) => r.wall_time_seconds),
     y: items.map((r) => r.objective_value),
     text: items.map((r) => `${r.instance_id}<br>feasible: ${r.feasible}`),
-    hovertemplate: `${algo}<br>%{text}<br>time=%{x:.3f}s<br>obj=%{y:.4f}<extra></extra>`,
+    hovertemplate: `${displayAlgo(algo)}<br>%{text}<br>time=%{x:.3f}s<br>obj=%{y:.4f}<extra></extra>`,
     marker: {
       size: 9,
       color: colorFor(algo),
@@ -314,7 +328,7 @@ function refreshTable() {
 
 function tableRows() {
   return filteredResults().map((r) => [
-    r.algorithm,
+    displayAlgo(r.algorithm),
     r.instance_id,
     `<span class="tag tag-bucket">${instanceBucket(r.instance_id)}</span>`,
     fmtNum(r.objective_value, 5),
@@ -327,6 +341,195 @@ function tableRows() {
     r.optimizer_iters ?? '—',
     r.shots ?? '—',
   ]);
+}
+
+// --- Quantum vs. Classical ---------------------------------------------------
+
+function setupComparison() {
+  const cmp = state.comparison;
+  if (!cmp || !cmp.records.length) return;
+
+  document.getElementById('cmp-instance-list').textContent =
+    cmp.instances.join(', ');
+
+  const sel = document.getElementById('cmp-instance');
+  cmp.instances.forEach((iid) => {
+    const opt = document.createElement('option');
+    opt.value = iid;
+    opt.textContent = iid;
+    sel.appendChild(opt);
+  });
+  sel.addEventListener('change', (e) => {
+    state.cmpInstance = e.target.value;
+    drawComparison();
+  });
+
+  buildCmpTable();
+  drawComparison();
+}
+
+function cmpRecords() {
+  const recs = state.comparison.records;
+  if (!state.cmpInstance) return recs;
+  return recs.filter((r) => r.instance_id === state.cmpInstance);
+}
+
+// Aggregate to one value per (solver) for bar charts: mean across instances/runs.
+function aggregateBy(records, field) {
+  const groups = {};
+  records.forEach((r) => {
+    if (r[field] == null) return;
+    const key = `${r.solver}|${r.type}`;
+    (groups[key] = groups[key] || []).push(r[field]);
+  });
+  return Object.entries(groups)
+    .map(([key, vals]) => {
+      const [solver, type] = key.split('|');
+      const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+      return { solver, type, value: mean };
+    })
+    .sort((a, b) => a.value - b.value);
+}
+
+function drawComparison() {
+  const recs = cmpRecords();
+  drawCmpObjective(recs);
+  drawCmpWalltime(recs);
+  drawCmpScatter(recs);
+  refreshCmpTable(recs);
+}
+
+function drawCmpObjective(recs) {
+  const agg = aggregateBy(recs, 'objective_value');
+  const trace = {
+    type: 'bar',
+    x: agg.map((d) => displayAlgo(d.solver)),
+    y: agg.map((d) => d.value),
+    marker: { color: agg.map((d) => TYPE_COLOR[d.type]) },
+    hovertemplate: '%{x}<br>objective = %{y:.4f}<extra></extra>',
+  };
+  const layout = {
+    ...PLOTLY_LAYOUT,
+    xaxis: { ...PLOTLY_LAYOUT.xaxis, tickangle: -30 },
+    yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'objective value' },
+    showlegend: false,
+  };
+  Plotly.newPlot('chart-cmp-objective', [trace], layout, PLOTLY_CFG);
+}
+
+function drawCmpWalltime(recs) {
+  const agg = aggregateBy(recs, 'wall_time_seconds').sort((a, b) => a.value - b.value);
+  const trace = {
+    type: 'bar',
+    x: agg.map((d) => displayAlgo(d.solver)),
+    y: agg.map((d) => d.value),
+    marker: { color: agg.map((d) => TYPE_COLOR[d.type]) },
+    hovertemplate: '%{x}<br>%{y:.4f}s<extra></extra>',
+  };
+  const layout = {
+    ...PLOTLY_LAYOUT,
+    xaxis: { ...PLOTLY_LAYOUT.xaxis, tickangle: -30 },
+    yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'wall time (s)', type: 'log' },
+    showlegend: false,
+  };
+  Plotly.newPlot('chart-cmp-walltime', [trace], layout, PLOTLY_CFG);
+}
+
+function drawCmpScatter(recs) {
+  const usable = recs.filter(
+    (r) => r.expected_return != null && r.volatility != null,
+  );
+  const byType = { classical: [], quantum: [] };
+  usable.forEach((r) => byType[r.type].push(r));
+
+  const traces = Object.entries(byType)
+    .filter(([, items]) => items.length)
+    .map(([type, items]) => ({
+      type: 'scatter',
+      mode: 'markers',
+      name: type,
+      x: items.map((r) => r.volatility),
+      y: items.map((r) => r.expected_return),
+      text: items.map((r) => `${displayAlgo(r.solver)} · ${r.instance_id}`),
+      hovertemplate:
+        '%{text}<br>vol=%{x:.2f}%<br>return=%{y:.2f}%<extra></extra>',
+      marker: {
+        size: 13,
+        symbol: type === 'quantum' ? 'diamond' : 'circle',
+        color: TYPE_COLOR[type],
+        line: { color: 'rgba(255,255,255,0.4)', width: 1 },
+      },
+    }));
+
+  // Constant-Sharpe reference lines.
+  const maxVol = Math.max(10, ...usable.map((r) => r.volatility));
+  const shapes = [0.5, 1.0, 1.5].map((s) => ({
+    type: 'line',
+    x0: 0,
+    y0: 0,
+    x1: maxVol,
+    y1: s * maxVol,
+    line: { color: 'rgba(255,255,255,0.15)', width: 1, dash: 'dash' },
+  }));
+  const annotations = [0.5, 1.0, 1.5].map((s) => ({
+    x: maxVol,
+    y: s * maxVol,
+    text: `Sharpe ${s}`,
+    showarrow: false,
+    font: { size: 10, color: 'rgba(255,255,255,0.4)' },
+    xanchor: 'right',
+    yanchor: 'bottom',
+  }));
+
+  if (!traces.length) {
+    Plotly.purge('chart-cmp-scatter');
+    document.getElementById('chart-cmp-scatter').innerHTML =
+      '<p style="color:#8a97ad; padding:24px;">No solvers report return/volatility for this selection.</p>';
+    return;
+  }
+
+  const layout = {
+    ...PLOTLY_LAYOUT,
+    xaxis: { ...PLOTLY_LAYOUT.xaxis, title: 'volatility %', rangemode: 'tozero' },
+    yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'expected return %', rangemode: 'tozero' },
+    shapes,
+    annotations,
+  };
+  Plotly.newPlot('chart-cmp-scatter', traces, layout, PLOTLY_CFG);
+}
+
+function typeTag(type) {
+  const cls = type === 'quantum' ? 'tag-bucket' : 'tag-good';
+  return `<span class="tag ${cls}">${type}</span>`;
+}
+
+function cmpTableRows(recs) {
+  return recs.map((r) => [
+    displayAlgo(r.solver),
+    typeTag(r.type),
+    r.instance_id,
+    fmtNum(r.objective_value, 4),
+    fmtNum(r.expected_return, 2),
+    fmtNum(r.volatility, 2),
+    fmtNum(r.sharpe, 3),
+    fmtNum(r.wall_time_seconds, 4),
+    feasibilityTag(r.feasible),
+  ]);
+}
+
+function buildCmpTable() {
+  state.cmpTable = $('#cmp-table').DataTable({
+    data: cmpTableRows(cmpRecords()),
+    pageLength: 12,
+    order: [[6, 'desc']],
+  });
+}
+
+function refreshCmpTable(recs) {
+  if (!state.cmpTable) return;
+  state.cmpTable.clear();
+  state.cmpTable.rows.add(cmpTableRows(recs));
+  state.cmpTable.draw();
 }
 
 init().catch((err) => {

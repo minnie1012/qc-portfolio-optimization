@@ -65,6 +65,49 @@
         <p class="subtitle">For algorithms with iterative optimizers (warm-start QAOA).</p>
         <div id="chart-convergence" class="chart"></div>
       </div>
+      <div class="card span-2 section-head">
+        <h2>Quantum vs. Classical</h2>
+        <p class="subtitle">Solvers compared on the instances where both families ran (<span id="cmp-instance-list"></span>). Risk, return &amp; Sharpe are computed from each solver's portfolio weights against the instance μ/Σ.</p>
+        <div class="control inline">
+          <label for="cmp-instance">Instance</label>
+          <select id="cmp-instance"><option value="">All shared</option></select>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Objective value by solver</h2>
+        <p class="subtitle">Lower is better. Note: solver families use different objective scalings.</p>
+        <div id="chart-cmp-objective" class="chart"></div>
+      </div>
+      <div class="card">
+        <h2>Wall time by solver</h2>
+        <p class="subtitle">Log scale, seconds.</p>
+        <div id="chart-cmp-walltime" class="chart"></div>
+      </div>
+      <div class="card span-2">
+        <h2>Risk vs. return (Sharpe)</h2>
+        <p class="subtitle">Up-and-left is better. Circles = classical, diamonds = quantum. Dashed lines mark constant Sharpe.</p>
+        <div id="chart-cmp-scatter" class="chart tall"></div>
+      </div>
+      <div class="card span-2">
+        <h2>Comparison table</h2>
+        <table id="cmp-table" class="display compact" style="width:100%">
+          <thead>
+            <tr>
+              <th>Solver</th>
+              <th>Type</th>
+              <th>Instance</th>
+              <th>Objective</th>
+              <th>Return %</th>
+              <th>Vol %</th>
+              <th>Sharpe</th>
+              <th>Wall (s)</th>
+              <th>Feasible</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
       <div class="card span-2">
         <h2>All runs</h2>
         <table id="runs-table" class="display compact" style="width:100%">

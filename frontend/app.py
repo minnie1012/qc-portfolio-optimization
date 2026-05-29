@@ -21,6 +21,9 @@ STATIC = FRONTEND / "static"
 INSTANCES_DIR = ROOT / "data" / "instances"
 RAW_RESULTS_DIR = ROOT / "results" / "raw"
 WARM_START_DIR = ROOT / "results" / "warm_start"
+CLASSICAL_DIR = ROOT / "results" / "classical-algos"
+
+QUANTUM_ALGOS = {"qsw", "warm_start_qaoa_saksham"}
 
 PORT = 5050
 
@@ -140,6 +143,153 @@ def results_for(instance_id: str) -> list[dict]:
     return items
 
 
+# --- Classical report-card parsing -----------------------------------------
+
+_BLOCK_SEP = "QC Portfolio Benchmark"
+
+
+def _parse_pct(token: str) -> float | None:
+    token = token.strip()
+    if token.endswith("%"):
+        try:
+            return float(token[:-1])
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_float(token: str) -> float | None:
+    token = token.strip().rstrip("s")
+    if token in ("", "n/a", "none"):
+        return None
+    try:
+        return float(token)
+    except ValueError:
+        return None
+
+
+def _parse_classical_block(block: str) -> dict | None:
+    def grab(label: str) -> str | None:
+        m = re.search(rf"{re.escape(label)}\s+(.+)", block)
+        return m.group(1).strip() if m else None
+
+    solver_raw = grab("solver")
+    if not solver_raw:
+        return None
+    solver = solver_raw.split()[0].replace(".py", "")
+
+    inst_m = re.search(r"instance\s+([A-Za-z0-9_]+)\.json", block)
+    instance_id = inst_m.group(1) if inst_m else None
+    if not instance_id:
+        return None
+
+    feasible = "✔ feasible" in block or ("feasible" in block and "✘" not in block)
+
+    obj = grab("objective value")
+    ret = grab("expected return")
+    vol = grab("volatility")
+    sharpe = grab("sharpe ratio")
+    wall = grab("wall time")
+
+    return {
+        "solver": solver,
+        "type": "classical",
+        "instance_id": instance_id,
+        "objective_value": _parse_float(obj) if obj else None,
+        "expected_return": _parse_pct(ret) if ret else None,
+        "volatility": _parse_pct(vol) if vol else None,
+        "sharpe": _parse_float(sharpe) if sharpe else None,
+        "wall_time_seconds": _parse_float(wall) if wall else None,
+        "feasible": feasible,
+    }
+
+
+def parse_classical() -> list[dict]:
+    records: list[dict] = []
+    if not CLASSICAL_DIR.exists():
+        return records
+    for f in sorted(CLASSICAL_DIR.glob("*.py")):
+        if f.name == "backtesting.py":
+            continue
+        text = f.read_text(errors="replace")
+        for block in text.split(_BLOCK_SEP):
+            if "objective value" not in block:
+                continue
+            rec = _parse_classical_block(block)
+            if rec:
+                records.append(rec)
+    return records
+
+
+# --- Quantum metric computation --------------------------------------------
+
+
+def _weights_from_bitstring(bitstring) -> list[float] | None:
+    if not isinstance(bitstring, list) or not bitstring:
+        return None
+    arr = [float(v) for v in bitstring]
+    total = sum(arr)
+    if total <= 0:
+        return None
+    is_binary = all(v in (0.0, 1.0) for v in arr)
+    if is_binary:
+        return [v / total for v in arr]  # equal weight over selected
+    return [v / total for v in arr]
+
+
+def _portfolio_metrics(weights, mu, sigma) -> dict:
+    n = len(weights)
+    ret = sum(weights[i] * mu[i] for i in range(n)) * 100.0  # percent
+    var = 0.0
+    for i in range(n):
+        for j in range(n):
+            var += weights[i] * sigma[i][j] * weights[j]
+    vol = (var ** 0.5) * 100.0  # percent
+    sharpe = (ret / vol) if vol > 0 else None
+    return {"expected_return": ret, "volatility": vol, "sharpe": sharpe}
+
+
+def quantum_comparison_records(instance_ids: set[str]) -> list[dict]:
+    records: list[dict] = []
+    for f in _iter_result_files():
+        try:
+            data = _load_json(f)
+        except Exception:
+            continue
+        iid = data.get("instance_id")
+        if iid not in instance_ids:
+            continue
+        inst = get_instance(iid)
+        if not inst:
+            continue
+        weights = _weights_from_bitstring(data.get("bitstring"))
+        metrics = {"expected_return": None, "volatility": None, "sharpe": None}
+        if weights and len(weights) == inst["N"]:
+            metrics = _portfolio_metrics(weights, inst["mu"], inst["sigma"])
+        records.append({
+            "solver": data["algorithm"],
+            "type": "quantum",
+            "instance_id": iid,
+            "objective_value": data.get("objective_value"),
+            "expected_return": metrics["expected_return"],
+            "volatility": metrics["volatility"],
+            "sharpe": metrics["sharpe"],
+            "wall_time_seconds": data.get("wall_time_seconds"),
+            "feasible": data.get("feasible"),
+        })
+    return records
+
+
+def build_comparison() -> dict:
+    classical = parse_classical()
+    shared_instances = sorted({r["instance_id"] for r in classical})
+    quantum = quantum_comparison_records(set(shared_instances))
+    return {
+        "instances": shared_instances,
+        "records": classical + quantum,
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # quieter logs
         sys.stderr.write("[%s] %s\n" % (self.log_date_time_string(), fmt % args))
@@ -205,6 +355,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/results":
             return self._send_json(list_results())
+
+        if path == "/api/comparison":
+            return self._send_json(build_comparison())
 
         m = re.match(r"^/api/instance/([A-Za-z0-9_]+)$", path)
         if m:
