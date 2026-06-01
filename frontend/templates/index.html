@@ -25,6 +25,156 @@
   </header>
 
   <main>
+    <!-- ================= QUANTUM ADVANTAGE SHOWCASE ================= -->
+    <section class="qa-banner">
+      <div class="qa-banner-text">
+        <span class="qa-eyebrow">Quantum Advantage</span>
+        <h2>Solving portfolio optimization on a quantum computer</h2>
+        <p>
+          Two quantum algorithms attack this problem. <strong>HHL</strong> solves the
+          Markowitz linear system <code>A·w = b</code> for the optimal asset weights in
+          time scaling with <em>log&nbsp;N</em> — exponentially faster than any classical
+          solver's <em>N</em>. The <strong>Quantum Stochastic Walk</strong> explores the
+          asset-correlation graph as an open quantum system, spreading <em>ballistically</em>
+          where a classical random walk only diffuses. Drive the controls below to see the
+          gap open up.
+        </p>
+      </div>
+      <div class="qa-banner-stats" id="qa-stats">
+        <div class="qa-stat"><span class="qa-stat-val" id="qa-speedup">–</span><span class="qa-stat-label">HHL speedup @ N</span></div>
+        <div class="qa-stat"><span class="qa-stat-val" id="qa-spread">–</span><span class="qa-stat-label">QSW spread vs classical</span></div>
+      </div>
+    </section>
+
+    <!-- ============ HHL: complexity scaling (interactive) ============ -->
+    <section class="grid quantum-grid">
+      <div class="card span-2 section-head">
+        <div class="section-head-row">
+          <div>
+            <h2>HHL — Quantum Linear Solver</h2>
+            <p class="subtitle">
+              The Harrow–Hassidim–Lloyd algorithm prepares the solution of <code>A·w = b</code>
+              as a quantum state in <strong>O(log N · κ²/ε)</strong> time. The best classical
+              solvers need <strong>O(N · κ · log 1/ε)</strong> — linear in the number of assets.
+              Slide the problem size to watch the operation counts diverge.
+            </p>
+          </div>
+          <div class="qsw-control-group">
+            <label for="quantum-instance">Instance (HHL &amp; QSW)</label>
+            <select id="quantum-instance"></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Cost vs. problem size</h2>
+        <p class="subtitle">Asymptotic operation counts (log–log). The crossover is where quantum wins.</p>
+        <div class="slider-row">
+          <label>Assets N = <span class="slider-val" id="hhl-n-val">256</span></label>
+          <input type="range" id="hhl-n" min="1" max="20" step="1" value="8" />
+          <span class="slider-hint">2¹ … 2²⁰</span>
+        </div>
+        <div class="slider-row">
+          <label>Condition κ = <span class="slider-val" id="hhl-kappa-val">30</span></label>
+          <input type="range" id="hhl-kappa" min="1" max="1000" step="1" value="30" />
+        </div>
+        <div class="slider-row">
+          <label>Precision ε = <span class="slider-val" id="hhl-eps-val">0.01</span></label>
+          <input type="range" id="hhl-eps" min="1" max="4" step="1" value="2" />
+          <span class="slider-hint">10⁻¹ … 10⁻⁴</span>
+        </div>
+        <div id="chart-hhl-scaling" class="chart"></div>
+      </div>
+
+      <div class="card">
+        <h2>What HHL computes on this instance</h2>
+        <p class="subtitle">Continuous Markowitz weights <code>w = A⁻¹b</code> — the state |w⟩ HHL prepares. Top-K are the selected assets.</p>
+        <div id="chart-hhl-weights" class="chart"></div>
+        <div class="resource-strip" id="hhl-resource"></div>
+      </div>
+
+      <div class="card span-2">
+        <h2>HHL — exact values</h2>
+        <p class="subtitle">Per-asset solution of the KKT linear system and the quantum circuit's resource cost.</p>
+        <table id="hhl-table" class="exact-table">
+          <thead>
+            <tr><th>#</th><th>Ticker</th><th>μ (return)</th><th>w (continuous)</th><th>|w|</th><th>Selected</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <!-- ============ QSW: open quantum walk (interactive) ============ -->
+      <div class="card span-2 section-head">
+        <h2>Quantum Stochastic Walk — Quantum vs. Classical Exploration</h2>
+        <p class="subtitle">
+          A walker starts on the highest-Sharpe asset and explores the correlation graph under a
+          GKLS (Lindblad) master equation. The mixing knob <code>ω</code> interpolates between a
+          <strong>coherent quantum walk (ω→0)</strong> and a <strong>classical random walk (ω→1)</strong>.
+          Quantum coherence lets it spread faster and build structure that decoherence washes out.
+        </p>
+        <div class="qsw-controls">
+          <div class="slider-row wide">
+            <label>ω = <span class="slider-val" id="qsw-omega-val">0.10</span></label>
+            <span class="pole pole-q">quantum</span>
+            <input type="range" id="qsw-omega" min="0" max="100" step="1" value="10" />
+            <span class="pole pole-c">classical</span>
+          </div>
+          <div class="qsw-control-group">
+            <label for="qsw-preset">Preset</label>
+            <select id="qsw-preset"></select>
+          </div>
+          <button id="qsw-play" class="btn">▶ Animate walk</button>
+        </div>
+      </div>
+
+      <div class="card span-2">
+        <h2>Walk spreading over time</h2>
+        <p class="subtitle">Population on each asset as the walk evolves. Scrub the time slider; the white line marks the current instant.</p>
+        <div id="chart-qsw-heatmap" class="chart tall"></div>
+        <div class="slider-row wide">
+          <label>time t = <span class="slider-val" id="qsw-time-val">0</span></label>
+          <input type="range" id="qsw-time" min="0" max="47" step="1" value="0" />
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Spreading speed — quantum vs. classical</h2>
+        <p class="subtitle">Participation ratio = effective # of assets occupied. Higher/faster = better exploration.</p>
+        <div id="chart-qsw-participation" class="chart"></div>
+      </div>
+
+      <div class="card">
+        <h2>Population snapshot @ t</h2>
+        <p class="subtitle">Where the walker is at the selected instant.</p>
+        <div id="chart-qsw-snapshot" class="chart"></div>
+      </div>
+
+      <div class="card">
+        <h2>Quantum coherence |ρ|</h2>
+        <p class="subtitle">Off-diagonal density-matrix terms at peak — the genuinely quantum part. They vanish as ω→1.</p>
+        <div id="chart-qsw-rho" class="chart"></div>
+      </div>
+
+      <div class="card">
+        <h2>Steady-state portfolio</h2>
+        <p class="subtitle">Long-run weights = diag(ρ∞). Decoherence drives them toward 1/N (red line).</p>
+        <div id="chart-qsw-weights" class="chart"></div>
+        <div class="resource-strip" id="qsw-stats-strip"></div>
+      </div>
+
+      <div class="card span-2">
+        <h2>QSW — exact values</h2>
+        <p class="subtitle">Steady-state weight per asset at the current ω, with concentration metrics.</p>
+        <table id="qsw-table" class="exact-table">
+          <thead>
+            <tr><th>#</th><th>Ticker</th><th>Steady weight</th><th>vs 1/N</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="card controls">
       <div class="control">
         <label for="instance-select">Instance</label>

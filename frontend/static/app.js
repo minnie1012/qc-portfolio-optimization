@@ -4,10 +4,11 @@ const PLOTLY_LAYOUT = {
   paper_bgcolor: 'rgba(0,0,0,0)',
   plot_bgcolor: 'rgba(0,0,0,0)',
   font: { color: '#e6edf6', family: 'Inter, -apple-system, sans-serif', size: 12 },
-  margin: { l: 50, r: 20, t: 30, b: 50 },
+  margin: { l: 50, r: 20, t: 46, b: 50 },
   xaxis: { gridcolor: 'rgba(255,255,255,0.06)', zerolinecolor: 'rgba(255,255,255,0.12)' },
   yaxis: { gridcolor: 'rgba(255,255,255,0.06)', zerolinecolor: 'rgba(255,255,255,0.12)' },
-  legend: { orientation: 'h', y: -0.2 },
+  // Legend above the plot so it never collides with x-axis ticks/titles.
+  legend: { orientation: 'h', y: 1.1, yanchor: 'bottom', x: 0, font: { size: 10 } },
 };
 
 const PLOTLY_CFG = { displaylogo: false, responsive: true };
@@ -78,6 +79,7 @@ async function init() {
   buildTable();
   drawScatter();
   setupComparison();
+  initQuantum(instances);
 
   if (instances.length) {
     document.getElementById('instance-select').value = instances[0].instance_id;
@@ -530,6 +532,462 @@ function refreshCmpTable(recs) {
   state.cmpTable.clear();
   state.cmpTable.rows.add(cmpTableRows(recs));
   state.cmpTable.draw();
+}
+
+// ===========================================================================
+// Quantum showcase: HHL scaling + linear solve, QSW open-quantum-walk dynamics
+// ===========================================================================
+
+const QSW_PRESETS = {
+  moderate_balanced: { label: 'Moderate-Balanced', alpha: 10, beta: 10, lam: 10 },
+  ultra_diversified: { label: 'Ultra-Diversified', alpha: 1, beta: 100, lam: 10 },
+  stability_focused: { label: 'Stability-Focused', alpha: 1, beta: 10, lam: 100 },
+  balanced_active: { label: 'Balanced-Active', alpha: 10, beta: 1, lam: 100 },
+  sharpe_maximizer: { label: 'Sharpe-Maximizer', alpha: 100, beta: 1, lam: 10 },
+};
+
+const QSW_MAX_N = 24;
+
+const qstate = {
+  instanceId: null,
+  evolution: null,
+  steady: null,
+  hhl: null,
+  timeIdx: 0,
+  omega: 0.1,
+  preset: 'moderate_balanced',
+  playing: false,
+  playTimer: null,
+  loadToken: 0,
+};
+
+function debounce(fn, ms) {
+  let t = null;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
+
+function initQuantum(instances) {
+  // The QSW Lindblad solve is n²×n²; cap the selector to keep it interactive.
+  const usable = instances.filter((i) => i.N <= QSW_MAX_N)
+    .sort((a, b) => a.N - b.N || a.instance_id.localeCompare(b.instance_id));
+  const sel = document.getElementById('quantum-instance');
+  usable.forEach((inst) => {
+    const opt = document.createElement('option');
+    opt.value = inst.instance_id;
+    opt.textContent = `${inst.instance_id}  ·  N=${inst.N}, K=${inst.K}`;
+    sel.appendChild(opt);
+  });
+  // Prefer a small (not tiny) instance so the walk has room to spread.
+  const preferred = usable.find((i) => i.N >= 8) || usable[0];
+  if (!preferred) return;
+  qstate.instanceId = preferred.instance_id;
+  sel.value = preferred.instance_id;
+  sel.addEventListener('change', (e) => {
+    qstate.instanceId = e.target.value;
+    loadHHL();
+    loadQSW();
+  });
+
+  // Preset dropdown
+  const psel = document.getElementById('qsw-preset');
+  Object.entries(QSW_PRESETS).forEach(([key, p]) => {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = p.label;
+    psel.appendChild(opt);
+  });
+  psel.value = qstate.preset;
+  psel.addEventListener('change', (e) => {
+    qstate.preset = e.target.value;
+    loadQSW();
+  });
+
+  // HHL scaling sliders (pure-JS, instant)
+  ['hhl-n', 'hhl-kappa', 'hhl-eps'].forEach((id) => {
+    document.getElementById(id).addEventListener('input', drawHHLScaling);
+  });
+
+  // QSW omega slider (re-solves on the server, debounced)
+  const omegaSlider = document.getElementById('qsw-omega');
+  const omegaDebounced = debounce(loadQSW, 110);
+  omegaSlider.addEventListener('input', (e) => {
+    qstate.omega = Number(e.target.value) / 100;
+    document.getElementById('qsw-omega-val').textContent = qstate.omega.toFixed(2);
+    omegaDebounced();
+  });
+
+  // Time scrubber (local — no fetch)
+  document.getElementById('qsw-time').addEventListener('input', (e) => {
+    qstate.timeIdx = Number(e.target.value);
+    renderQSWTime();
+  });
+
+  document.getElementById('qsw-play').addEventListener('click', togglePlay);
+
+  drawHHLScaling();
+  loadHHL();
+  loadQSW();
+}
+
+// --- HHL complexity scaling (asymptotic operation counts) -------------------
+
+function hhlScalingParams() {
+  const nExp = Number(document.getElementById('hhl-n').value);     // 1..20
+  const kappa = Number(document.getElementById('hhl-kappa').value); // 1..1000
+  const epsExp = Number(document.getElementById('hhl-eps').value);  // 1..4
+  const eps = Math.pow(10, -epsExp);
+  const N = Math.pow(2, nExp);
+  document.getElementById('hhl-n-val').textContent = N.toLocaleString();
+  document.getElementById('hhl-kappa-val').textContent = kappa;
+  document.getElementById('hhl-eps-val').textContent = eps.toString();
+  return { nExp, N, kappa, eps };
+}
+
+// Asymptotic proxies (arbitrary units): the slopes & crossover are the point.
+const costDirect = (N) => Math.pow(N, 3);                         // classical LU  O(N³)
+const costCG = (N, k, e) => N * k * Math.log2(1 / e + 1);        // classical CG  O(N·κ·log 1/ε)
+const costHHL = (N, k, e) => Math.log2(N + 1) * k * k / e;        // HHL  O(log N·κ²/ε)
+
+function drawHHLScaling() {
+  const { nExp, N, kappa, eps } = hhlScalingParams();
+  const xs = [];
+  for (let e = 1; e <= 20; e += 1) xs.push(Math.pow(2, e));
+  const yDirect = xs.map((n) => costDirect(n));
+  const yCG = xs.map((n) => costCG(n, kappa, eps));
+  const yHHL = xs.map((n) => costHHL(n, kappa, eps));
+
+  const mk = (name, x, y, color, dash) => ({
+    type: 'scatter', mode: 'lines', name, x, y,
+    line: { color, width: 2.4, dash: dash || 'solid' },
+    hovertemplate: `${name}<br>N=%{x}<br>ops≈%{y:.3g}<extra></extra>`,
+  });
+  const traces = [
+    mk('Classical — direct O(N³)', xs, yDirect, '#ff7a7a', 'dot'),
+    mk('Classical — CG O(N·κ·log 1/ε)', xs, yCG, '#ffb86b'),
+    mk('HHL — quantum O(log N·κ²/ε)', xs, yHHL, '#7cc4ff'),
+  ];
+
+  // Marker at the selected N
+  const cgN = costCG(N, kappa, eps);
+  const hhlN = costHHL(N, kappa, eps);
+  traces.push({
+    type: 'scatter', mode: 'markers', name: `N = ${N.toLocaleString()}`,
+    x: [N, N], y: [cgN, hhlN], showlegend: false,
+    marker: { size: 11, color: ['#ffb86b', '#7cc4ff'], line: { color: '#fff', width: 1.2 } },
+    hovertemplate: 'N=%{x}<br>ops≈%{y:.3g}<extra></extra>',
+  });
+
+  const layout = {
+    ...PLOTLY_LAYOUT,
+    xaxis: { ...PLOTLY_LAYOUT.xaxis, title: 'assets N', type: 'log' },
+    yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'operations (asymptotic, a.u.)', type: 'log' },
+    shapes: [{
+      type: 'line', x0: N, x1: N, y0: Math.min(cgN, hhlN), y1: Math.max(cgN, hhlN),
+      line: { color: 'rgba(255,255,255,0.25)', width: 1, dash: 'dash' },
+    }],
+  };
+  Plotly.react('chart-hhl-scaling', traces, layout, PLOTLY_CFG);
+
+  // Headline speedup in the banner
+  const speedup = cgN / hhlN;
+  const el = document.getElementById('qa-speedup');
+  if (speedup >= 1) {
+    el.textContent = `${speedup >= 100 ? Math.round(speedup) : speedup.toFixed(1)}×`;
+    el.style.color = 'var(--good)';
+  } else {
+    el.textContent = `${(1 / speedup).toFixed(1)}× ↓`;
+    el.style.color = 'var(--warn)';
+  }
+  document.querySelector('#qa-stats .qa-stat-label').textContent =
+    `HHL speedup @ N=${N.toLocaleString()}`;
+}
+
+// --- HHL on a real instance -------------------------------------------------
+
+async function loadHHL() {
+  const id = qstate.instanceId;
+  if (!id) return;
+  try {
+    const data = await fetchJSON(`/api/quantum/hhl/${id}`);
+    if (data.error) return;
+    qstate.hhl = data;
+    drawHHLWeights(data);
+    fillHHLResource(data);
+    fillHHLTable(data);
+  } catch (e) {
+    console.error('HHL load failed', e);
+  }
+}
+
+function drawHHLWeights(d) {
+  const sel = new Set(d.selected);
+  const trace = {
+    type: 'bar',
+    x: d.tickers,
+    y: d.weights,
+    marker: {
+      color: d.weights.map((_, i) => (sel.has(i) ? '#5cd6a3' : 'rgba(124,196,255,0.45)')),
+      line: { color: d.weights.map((_, i) => (sel.has(i) ? '#5cd6a3' : 'rgba(124,196,255,0.3)')), width: 1 },
+    },
+    hovertemplate: '%{x}<br>w = %{y:.4f}<extra></extra>',
+  };
+  const layout = {
+    ...PLOTLY_LAYOUT,
+    yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'continuous weight wᵢ', zeroline: true },
+    xaxis: { ...PLOTLY_LAYOUT.xaxis, tickangle: -45 },
+    showlegend: false,
+    title: { text: `selected ${d.K} of ${d.N} assets (green)`, font: { size: 11, color: '#8a97ad' }, x: 0.02, y: 0.97 },
+  };
+  Plotly.react('chart-hhl-weights', [trace], layout, PLOTLY_CFG);
+}
+
+function fillHHLResource(d) {
+  const r = d.resource;
+  const chips = [
+    ['qubits', r.qubit_count],
+    ['circuit depth', r.circuit_depth.toLocaleString()],
+    ['2-qubit gates', r.two_qubit_gate_count.toLocaleString()],
+    ['n_b', r.n_b],
+    ['clock qubits', r.n_clock],
+    ['κ (cond.)', fmtNum(r.kappa, 1)],
+  ];
+  document.getElementById('hhl-resource').innerHTML =
+    chips.map(([k, v]) => `<span class="chip">${k} <strong>${v}</strong></span>`).join('') +
+    `<span class="chip">backend <strong>${d.backend.replace(/_/g, ' ')}</strong></span>`;
+}
+
+function fillHHLTable(d) {
+  const sel = new Set(d.selected);
+  const body = d.tickers.map((tk, i) => {
+    const cls = sel.has(i) ? ' class="is-selected"' : '';
+    return `<tr${cls}>
+      <td>${i}</td><td>${tk}</td>
+      <td>${fmtNum(d.mu[i], 4)}</td>
+      <td>${fmtNum(d.weights[i], 4)}</td>
+      <td>${fmtNum(d.weights_abs[i], 4)}</td>
+      <td>${sel.has(i) ? '<span class="tag tag-good">selected</span>' : '—'}</td>
+    </tr>`;
+  }).join('');
+  document.querySelector('#hhl-table tbody').innerHTML = body;
+}
+
+// --- QSW open-quantum-walk dynamics -----------------------------------------
+
+async function loadQSW() {
+  const id = qstate.instanceId;
+  if (!id) return;
+  const p = QSW_PRESETS[qstate.preset];
+  const token = ++qstate.loadToken;
+  const qp = `omega=${qstate.omega}&alpha=${p.alpha}&beta=${p.beta}&lam=${p.lam}`;
+  try {
+    const [evo, steady] = await Promise.all([
+      fetchJSON(`/api/quantum/qsw_evolution/${id}?${qp}`),
+      fetchJSON(`/api/quantum/qsw/${id}?${qp}`),
+    ]);
+    if (token !== qstate.loadToken) return; // stale (user kept sliding)
+    if (evo.error || steady.error) {
+      flagQSWUnavailable(evo.error || steady.error);
+      return;
+    }
+    qstate.evolution = evo;
+    qstate.steady = steady;
+    qstate.timeIdx = Math.min(qstate.timeIdx, evo.times.length - 1);
+
+    const tslider = document.getElementById('qsw-time');
+    tslider.max = evo.times.length - 1;
+
+    drawQSWHeatmap(evo);
+    drawQSWParticipation(evo);
+    drawQSWRho(evo);
+    drawQSWWeights(steady);
+    fillQSWStats(steady);
+    fillQSWTable(steady);
+    renderQSWTime();
+    updateSpreadStat(evo);
+  } catch (e) {
+    console.error('QSW load failed', e);
+  }
+}
+
+function flagQSWUnavailable(msg) {
+  ['chart-qsw-heatmap', 'chart-qsw-participation', 'chart-qsw-snapshot',
+    'chart-qsw-rho', 'chart-qsw-weights'].forEach((id) => {
+    Plotly.purge(id);
+    document.getElementById(id).innerHTML =
+      `<p style="color:#8a97ad;padding:24px;">${msg}</p>`;
+  });
+}
+
+function drawQSWHeatmap(evo) {
+  // z[asset][time] = population
+  const N = evo.N;
+  const z = [];
+  for (let a = 0; a < N; a += 1) z.push(evo.population.map((row) => row[a]));
+  const trace = {
+    type: 'heatmap',
+    z, x: evo.times, y: evo.tickers,
+    colorscale: 'Viridis',
+    colorbar: { thickness: 10, len: 0.9, title: { text: 'pop', font: { size: 10 } } },
+    hovertemplate: 't=%{x:.3f}<br>%{y}<br>pop=%{z:.3f}<extra></extra>',
+  };
+  const layout = {
+    ...PLOTLY_LAYOUT,
+    xaxis: { ...PLOTLY_LAYOUT.xaxis, title: 'time' },
+    yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'asset' },
+  };
+  Plotly.react('chart-qsw-heatmap', [trace], layout, PLOTLY_CFG);
+}
+
+function drawQSWParticipation(evo) {
+  const tQ = {
+    type: 'scatter', mode: 'lines', name: `quantum (ω=${evo.omega.toFixed(2)})`,
+    x: evo.times, y: evo.participation,
+    line: { color: '#b794ff', width: 2.6 },
+  };
+  const tC = {
+    type: 'scatter', mode: 'lines', name: 'classical (ω=1)',
+    x: evo.times, y: evo.participation_classical,
+    line: { color: '#ffb86b', width: 2, dash: 'dash' },
+  };
+  const layout = {
+    ...PLOTLY_LAYOUT,
+    xaxis: { ...PLOTLY_LAYOUT.xaxis, title: 'time' },
+    yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'effective # assets occupied', rangemode: 'tozero' },
+  };
+  Plotly.react('chart-qsw-participation', [tQ, tC], layout, PLOTLY_CFG);
+}
+
+function drawQSWRho(evo) {
+  const trace = {
+    type: 'heatmap',
+    z: evo.rho_peak, x: evo.tickers, y: evo.tickers,
+    colorscale: 'Magma',
+    colorbar: { thickness: 10, len: 0.9 },
+    hovertemplate: '%{y} ↔ %{x}<br>|ρ| = %{z:.3f}<extra></extra>',
+  };
+  const layout = {
+    ...PLOTLY_LAYOUT,
+    xaxis: { ...PLOTLY_LAYOUT.xaxis, tickangle: -45 },
+    yaxis: { ...PLOTLY_LAYOUT.yaxis, autorange: 'reversed' },
+  };
+  Plotly.react('chart-qsw-rho', [trace], layout, PLOTLY_CFG);
+}
+
+function drawQSWWeights(steady) {
+  const ew = steady.equal_weight;
+  const trace = {
+    type: 'bar', x: steady.tickers, y: steady.weights,
+    marker: { color: '#7cc4ff' },
+    hovertemplate: '%{x}<br>w = %{y:.4f}<extra></extra>',
+  };
+  const layout = {
+    ...PLOTLY_LAYOUT,
+    xaxis: { ...PLOTLY_LAYOUT.xaxis, tickangle: -45 },
+    yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'steady weight', rangemode: 'tozero' },
+    showlegend: false,
+    shapes: [{
+      type: 'line', x0: -0.5, x1: steady.tickers.length - 0.5, y0: ew, y1: ew,
+      line: { color: '#ff7a7a', width: 1.5, dash: 'dash' },
+    }],
+    annotations: [{
+      x: steady.tickers.length - 0.5, y: ew, text: `1/N = ${ew.toFixed(3)}`,
+      showarrow: false, font: { size: 10, color: '#ff7a7a' }, xanchor: 'right', yanchor: 'bottom',
+    }],
+  };
+  Plotly.react('chart-qsw-weights', [trace], layout, PLOTLY_CFG);
+}
+
+function fillQSWStats(s) {
+  const chips = [
+    ['ω', s.omega.toFixed(2)],
+    ['HHI', fmtNum(s.hhi, 3)],
+    ['eff. # stocks', fmtNum(s.eff_stocks, 2)],
+    ['coherence', fmtNum(s.coherence, 3)],
+    ['N', s.N],
+  ];
+  document.getElementById('qsw-stats-strip').innerHTML =
+    chips.map(([k, v]) => `<span class="chip">${k} <strong>${v}</strong></span>`).join('');
+}
+
+function fillQSWTable(s) {
+  const ew = s.equal_weight;
+  const body = s.tickers.map((tk, i) => {
+    const w = s.weights[i];
+    const rel = w - ew;
+    const relTxt = `${rel >= 0 ? '+' : ''}${fmtNum(rel, 4)}`;
+    const color = rel >= 0 ? 'var(--good)' : 'var(--bad)';
+    return `<tr>
+      <td>${i}</td><td>${tk}</td>
+      <td>${fmtNum(w, 4)}</td>
+      <td style="color:${color}">${relTxt}</td>
+    </tr>`;
+  }).join('');
+  document.querySelector('#qsw-table tbody').innerHTML = body;
+}
+
+function renderQSWTime() {
+  const evo = qstate.evolution;
+  if (!evo) return;
+  const i = Math.min(qstate.timeIdx, evo.times.length - 1);
+  document.getElementById('qsw-time-val').textContent = evo.times[i].toFixed(3);
+
+  // snapshot bar
+  const trace = {
+    type: 'bar', x: evo.tickers, y: evo.population[i],
+    marker: { color: '#5cd6a3' },
+    hovertemplate: '%{x}<br>pop = %{y:.3f}<extra></extra>',
+  };
+  const layout = {
+    ...PLOTLY_LAYOUT,
+    xaxis: { ...PLOTLY_LAYOUT.xaxis, tickangle: -45 },
+    yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'population', range: [0, 1] },
+    showlegend: false,
+  };
+  Plotly.react('chart-qsw-snapshot', [trace], layout, PLOTLY_CFG);
+
+  // move the time marker on the heatmap
+  const t = evo.times[i];
+  Plotly.relayout('chart-qsw-heatmap', {
+    shapes: [{
+      type: 'line', x0: t, x1: t, y0: -0.5, y1: evo.N - 0.5,
+      line: { color: '#ffffff', width: 2 },
+    }],
+  });
+}
+
+function updateSpreadStat(evo) {
+  const last = evo.participation.length - 1;
+  const q = evo.participation[last];
+  const c = evo.participation_classical[last];
+  const ratio = c > 1e-9 ? q / c : 1;
+  const el = document.getElementById('qa-spread');
+  el.textContent = `${ratio.toFixed(2)}×`;
+  el.style.color = ratio >= 1 ? 'var(--good)' : 'var(--warn)';
+}
+
+function togglePlay() {
+  const btn = document.getElementById('qsw-play');
+  if (qstate.playing) {
+    clearInterval(qstate.playTimer);
+    qstate.playing = false;
+    btn.classList.remove('playing');
+    btn.textContent = '▶ Animate walk';
+    return;
+  }
+  if (!qstate.evolution) return;
+  qstate.playing = true;
+  btn.classList.add('playing');
+  btn.textContent = '⏸ Pause';
+  const slider = document.getElementById('qsw-time');
+  qstate.playTimer = setInterval(() => {
+    const n = qstate.evolution.times.length;
+    qstate.timeIdx = (qstate.timeIdx + 1) % n;
+    slider.value = qstate.timeIdx;
+    renderQSWTime();
+  }, 120);
 }
 
 init().catch((err) => {
