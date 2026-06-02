@@ -11,21 +11,22 @@ from pathlib import Path
 from benchmark_protocol import instances
 
 
-# ── Michael's backtest function ────────────────────────────────────────────────
+# ── Michael's backtest function (corrected) ────────────────────────────────────
 
-def backtesting(stocks, weights, risk_free=0.0456/252):
+def backtesting(stocks, weights, risk_free=0.0456):
     train = yf.download(stocks, start="2022-01-01", end="2024-12-31", auto_adjust=True, progress=False)
     test = yf.download(stocks, start="2025-01-01", end="2025-12-31", auto_adjust=True, progress=False)
     backtest_data = pd.DataFrame(test['Close'])
     train = pd.DataFrame(train['Close'])
-    cov = train.cov()
     weight_arr = np.array(weights)
-    risk = np.dot(np.dot(weight_arr.T, cov), weight_arr)
-    returns = 0
-    for i in range(len(stocks)):
-        temp = weights[i] * (backtest_data[stocks[i]].iloc[-1] - backtest_data[stocks[i]].iloc[0])
-        returns += temp
-    sharpe = (returns - risk_free) / risk
+    ret = train.pct_change().dropna()
+    cov = ret.cov() * 252
+    risk = np.sqrt(np.dot(np.dot(weight_arr.T, cov), weight_arr))
+    init = np.array([backtest_data[stocks[i]].iloc[0] for i in range(len(stocks))])
+    final = np.array([backtest_data[stocks[i]].iloc[-1] for i in range(len(stocks))])
+    returns = (final - init) / init
+    profit = np.dot(returns, weight_arr)
+    sharpe = (profit - risk_free) / risk
     return sharpe
 
 
@@ -33,8 +34,12 @@ def backtesting(stocks, weights, risk_free=0.0456/252):
 
 results_dir = Path(__file__).resolve().parent.parent / "results"
 
-qaoa_files = sorted((results_dir / "qaoa").glob("qaoa_saksham__*.json"))
-warm_files = sorted((results_dir / "warm_start").glob("warm_start_qaoa_saksham__*.json"))
+# For testing, you can specify a subset of files to run backtest on. By default, it will run on all QAOA and Warm Start results.
+# qaoa_files = sorted((results_dir / "qaoa").glob("qaoa_saksham__*.json"))
+# warm_files = sorted((results_dir / "warm_start").glob("warm_start_qaoa_saksham__*.json"))
+
+qaoa_files = sorted((results_dir / "qaoa").glob("qaoa_saksham__medium_*.json"))
+warm_files = sorted((results_dir / "warm_start").glob("warm_start_qaoa_saksham__medium_*.json"))
 
 all_files = list(qaoa_files) + list(warm_files)
 print(f"Found {len(qaoa_files)} QAOA results and {len(warm_files)} Warm Start results")
@@ -98,7 +103,8 @@ for path in all_files:
 
 output_dir = Path(__file__).resolve().parent.parent / "results" / "backtest"
 output_dir.mkdir(parents=True, exist_ok=True)
-output_path = output_dir / "qaoa_backtest_results.csv"
+# output_path = output_dir / "qaoa_backtest_results.csv"
+output_path = output_dir / "qaoa_backtest_results_medium_only.csv"
 
 with open(output_path, "w", newline="") as f:
     writer = csv.DictWriter(f, fieldnames=["algorithm", "instance_id", "p", "selected_stocks", "K", "sharpe_ratio", "feasible", "approx_ratio"])
