@@ -18,7 +18,8 @@ from solver_common import build_qubo_from_inst, qubo_eval, exact_reference, appr
 # ── Instances to run on ────────────────────────────────────────────────────────
 
 from benchmark_protocol.instances import SUBSETS
-INSTANCE_IDS = SUBSETS["matched_quantum_classical"]
+from benchmark_protocol.instances import BUCKETS
+INSTANCE_IDS = BUCKETS["medium"]
 P_VALUES = [1, 2]
 
 
