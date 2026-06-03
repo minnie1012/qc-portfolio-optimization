@@ -164,7 +164,6 @@ async function selectInstance(instanceId) {
   drawMu(inst);
   drawSigma(inst);
   drawWeights(inst, results);
-  drawConvergence(results);
 }
 
 function renderInstanceMeta(inst) {
@@ -246,38 +245,6 @@ function drawWeights(inst, results) {
     yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'allocation', rangemode: 'tozero' },
   };
   Plotly.newPlot('chart-weights', traces, layout, PLOTLY_CFG);
-}
-
-function drawConvergence(results) {
-  const withHist = results.filter(
-    (r) => Array.isArray(r.convergence_history) && r.convergence_history.length > 1,
-  );
-  if (!withHist.length) {
-    Plotly.purge('chart-convergence');
-    document.getElementById('chart-convergence').innerHTML =
-      '<p style="color:#8a97ad; padding:24px;">No iterative-optimizer history for this instance.</p>';
-    return;
-  }
-  const traces = withHist.map((r) => {
-    const p = r.hyperparameters && r.hyperparameters.p;
-    const name = displayAlgo(r.algorithm);
-    const label = p !== undefined ? `${name} (p=${p})` : name;
-    return {
-      type: 'scatter',
-      mode: 'lines+markers',
-      name: label,
-      x: r.convergence_history.map((_, i) => i),
-      y: r.convergence_history,
-      line: { color: colorFor(r.algorithm), width: 2 },
-      marker: { size: 4 },
-    };
-  });
-  const layout = {
-    ...PLOTLY_LAYOUT,
-    xaxis: { ...PLOTLY_LAYOUT.xaxis, title: 'iteration' },
-    yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'objective' },
-  };
-  Plotly.newPlot('chart-convergence', traces, layout, PLOTLY_CFG);
 }
 
 function drawScatter() {
@@ -412,7 +379,8 @@ function drawCmpObjective(recs) {
   };
   const layout = {
     ...PLOTLY_LAYOUT,
-    xaxis: { ...PLOTLY_LAYOUT.xaxis, tickangle: -30 },
+    margin: { ...PLOTLY_LAYOUT.margin, b: 110 },
+    xaxis: { ...PLOTLY_LAYOUT.xaxis, tickangle: -35, automargin: true },
     yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'objective value' },
     showlegend: false,
   };
@@ -430,7 +398,8 @@ function drawCmpWalltime(recs) {
   };
   const layout = {
     ...PLOTLY_LAYOUT,
-    xaxis: { ...PLOTLY_LAYOUT.xaxis, tickangle: -30 },
+    margin: { ...PLOTLY_LAYOUT.margin, b: 110 },
+    xaxis: { ...PLOTLY_LAYOUT.xaxis, tickangle: -35, automargin: true },
     yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'wall time (s)', type: 'log' },
     showlegend: false,
   };
