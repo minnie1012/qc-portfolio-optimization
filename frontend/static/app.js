@@ -821,11 +821,26 @@ function flagQSWUnavailable(msg) {
   });
 }
 
+// Build ~`count` evenly spaced, rounded tick labels for a numeric series.
+function roundedTicks(values, count = 7, digits = 2) {
+  const n = values.length;
+  if (!n) return { tickvals: [], ticktext: [] };
+  const step = Math.max(1, Math.round((n - 1) / (count - 1)));
+  const tickvals = [];
+  const ticktext = [];
+  for (let i = 0; i < n; i += step) {
+    tickvals.push(values[i]);
+    ticktext.push(values[i].toFixed(digits));
+  }
+  return { tickvals, ticktext };
+}
+
 function drawQSWHeatmap(evo) {
   // z[asset][time] = population
   const N = evo.N;
   const z = [];
   for (let a = 0; a < N; a += 1) z.push(evo.population.map((row) => row[a]));
+  const ticks = roundedTicks(evo.times);
   const trace = {
     type: 'heatmap',
     z, x: evo.times, y: evo.tickers,
@@ -835,7 +850,10 @@ function drawQSWHeatmap(evo) {
   };
   const layout = {
     ...PLOTLY_LAYOUT,
-    xaxis: { ...PLOTLY_LAYOUT.xaxis, title: 'time' },
+    xaxis: {
+      ...PLOTLY_LAYOUT.xaxis, title: 'time',
+      tickmode: 'array', tickvals: ticks.tickvals, ticktext: ticks.ticktext,
+    },
     yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'asset' },
   };
   Plotly.react('chart-qsw-heatmap', [trace], layout, PLOTLY_CFG);
@@ -852,9 +870,13 @@ function drawQSWParticipation(evo) {
     x: evo.times, y: evo.participation_classical,
     line: { color: '#ffb86b', width: 2, dash: 'dash' },
   };
+  const ticks = roundedTicks(evo.times);
   const layout = {
     ...PLOTLY_LAYOUT,
-    xaxis: { ...PLOTLY_LAYOUT.xaxis, title: 'time' },
+    xaxis: {
+      ...PLOTLY_LAYOUT.xaxis, title: 'time',
+      tickmode: 'array', tickvals: ticks.tickvals, ticktext: ticks.ticktext,
+    },
     yaxis: { ...PLOTLY_LAYOUT.yaxis, title: 'effective # assets occupied', rangemode: 'tozero' },
   };
   Plotly.react('chart-qsw-participation', [tQ, tC], layout, PLOTLY_CFG);
