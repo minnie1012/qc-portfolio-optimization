@@ -1,0 +1,32 @@
+{
+  "start_date": "2022-01-03",
+  "end_date": "2025-12-31",
+  "lookback_days": 252,
+  "hold_days": 21,
+  "rebalance_step": 21,
+  "select_k": 4,
+  "asset_universe": [
+    "1 Yr",
+    "2 Yr",
+    "3 Yr",
+    "5 Yr",
+    "7 Yr",
+    "10 Yr",
+    "20 Yr",
+    "30 Yr"
+  ],
+  "risk_free_tenor": "3 Mo",
+  "periods": 35,
+  "portfolio": {
+    "annual_return": -0.012443863132797545,
+    "annual_vol": 0.05220272536948208,
+    "sharpe": -1.156046385961563,
+    "total_return": -0.03946743279856035
+  },
+  "baseline": {
+    "annual_return": -0.01678421787119356,
+    "annual_vol": 0.08785763048338732,
+    "sharpe": -0.7362991186565364,
+    "total_return": -0.05841964688327339
+  }
+}

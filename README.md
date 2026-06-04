@@ -22,6 +22,7 @@ scripts/
   build_real_instances.py              rebuild data/instances_real/
   run_benchmarks.py                    run all 4 solvers on data/instances/
   run_csv_backtest.py                  run all 4 solvers on data/instances_real/
+  treasury_backtest.py                 rolling Treasury-bond proxy backtest with Sharpe ratio
   compare_metrics.py                   §6 priority metrics summary
   portfolio_metrics.py                 annual return, Sharpe, OOS backtest
   fetch_prices.py                      pull fresh prices from yfinance
@@ -38,6 +39,7 @@ python scripts/regenerate_instances_from_prices.py   # data/instances/
 python scripts/build_real_instances.py               # data/instances_real/
 python scripts/run_benchmarks.py                     # 184 jobs
 python scripts/run_csv_backtest.py                   # 16 jobs
+python scripts/treasury_backtest.py                  # Treasury proxy backtest + Sharpe
 python -m benchmark_protocol.aggregate               # all_runs.csv
 python scripts/compare_metrics.py                    # comparison_metrics.json
 python scripts/portfolio_metrics.py                  # portfolio_metrics.csv

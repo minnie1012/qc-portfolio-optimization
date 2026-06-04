@@ -1,0 +1,67 @@
+{
+  "generated_utc": "2026-06-04T10:29:49Z",
+  "experiments": {
+    "treasury_backtest": {
+      "source_summary": "results/treasury_backtest/treasury_backtest_summary.json",
+      "periods": 35,
+      "portfolio_sharpe": -1.1560,
+      "baseline_sharpe": -0.7363,
+      "portfolio_total_return": -0.039467,
+      "baseline_total_return": -0.058420
+    },
+    "etf_cvar_vqa": {
+      "source_summary": "sample_vqa/results_etf/summary.json",
+      "universe": ["SPY", "QQQ", "IWM", "EFA", "EEM", "AGG", "TLT", "LQD", "HYG", "GLD", "VNQ", "XLE"],
+      "in_sample": ["2022-01-01", "2024-12-31"],
+      "out_of_sample": ["2025-01-01", "2025-12-31"],
+      "exact_optimum": -5.9809007847453115,
+      "exact_selected": [0, 8, 9, 11],
+      "alpha_sweep": {
+        "0.1": {
+          "raw_gap_pct": 0.0,
+          "polished_gap_pct": 0.0,
+          "oos_strategy_sharpe": 1.7563348755130919,
+          "oos_strategy_total_return": 0.33563511711477534,
+          "oos_equal_weight_all_sharpe": 1.171288654775919
+        },
+        "0.2": {
+          "raw_gap_pct": 0.0,
+          "polished_gap_pct": 0.0,
+          "oos_strategy_sharpe": 1.7563348755130919,
+          "oos_strategy_total_return": 0.33563511711477534,
+          "oos_equal_weight_all_sharpe": 1.171288654775919
+        },
+        "1.0": {
+          "raw_gap_pct": 3.1783023376607504,
+          "polished_gap_pct": 1.8354712673424525,
+          "oos_strategy_sharpe": 1.8016687047010123,
+          "oos_strategy_total_return": 0.34272853386532165,
+          "oos_equal_weight_all_sharpe": 1.171288654775919
+        }
+      },
+      "ansatz_comparison": {
+        "TwoLocal-bilinear": {
+          "raw_gap_pct": 0.0,
+          "polished_gap_pct": 0.0,
+          "elapsed_s": 9.781314373016357,
+          "oos_strategy_sharpe": 1.7563348755130919,
+          "oos_strategy_total_return": 0.33563511711477534
+        },
+        "TwoLocal-colored": {
+          "raw_gap_pct": 0.0,
+          "polished_gap_pct": 0.0,
+          "elapsed_s": 8.918304920196533,
+          "oos_strategy_sharpe": 1.7563348755130919,
+          "oos_strategy_total_return": 0.33563511711477534
+        },
+        "BFCD-bilinear": {
+          "raw_gap_pct": 0.0,
+          "polished_gap_pct": 0.0,
+          "elapsed_s": 24.57390332221985,
+          "oos_strategy_sharpe": 1.7563348755130919,
+          "oos_strategy_total_return": 0.33563511711477534
+        }
+      }
+    }
+  }
+}
