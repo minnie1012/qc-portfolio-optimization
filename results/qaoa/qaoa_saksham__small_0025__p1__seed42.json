@@ -1,0 +1,83 @@
+{
+  "algorithm": "qaoa_saksham",
+  "algorithm_version": "1.0.0",
+  "instance_id": "small_0025",
+  "seed": 42,
+  "objective_value": -4.568264664170453,
+  "bitstring": [
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    1,
+    0,
+    1
+  ],
+  "feasible": true,
+  "approx_ratio": 1.0,
+  "wall_time_seconds": 0.11394170898711309,
+  "optimizer_iters": 26,
+  "num_circuit_evaluations": 27,
+  "convergence_history": [
+    -1.6491270892721746,
+    -0.3723978823671767,
+    -1.596501834580249,
+    1.0804034660036541,
+    0.7144314641613153,
+    -1.7817164196420248,
+    -0.6841000068137627,
+    -1.7801059624865574,
+    -1.8892955183095699,
+    -1.7894776216444412,
+    -1.8865670141908442,
+    -1.8877912119750695,
+    -1.8826475071168012,
+    -1.8892438168927002,
+    -1.8882757830166421,
+    -1.8890408147895639,
+    -1.8892947018877166,
+    -1.8892367127788436,
+    -1.8892924910122404,
+    -1.889287333770037,
+    -1.8892923877948364,
+    -1.8892954854291757,
+    -1.8892951433882628,
+    -1.8892954372307538,
+    -1.8892955241032567,
+    -1.8892954921857201
+  ],
+  "qubit_count": 9,
+  "circuit_depth": 55,
+  "two_qubit_gate_count": 72,
+  "t_gate_count": 0,
+  "total_gate_count": 199,
+  "shots": 4096,
+  "backend": "qiskit_aer.AerSimulator",
+  "transpile_optimization_level": 1,
+  "hyperparameters": {
+    "p": 1,
+    "optimizer": "COBYLA",
+    "optimizer_maxiter": 80
+  },
+  "initial_params": [
+    4.862909272689599,
+    2.757554564287996
+  ],
+  "final_params": [
+    4.712459816416924,
+    2.7653898518298483
+  ],
+  "env": {
+    "python": "3.14.3",
+    "platform": "macOS-26.4-arm64-arm-64bit-Mach-O",
+    "qiskit": "2.4.1",
+    "numpy": "2.4.4",
+    "scipy": "1.17.1",
+    "qiskit_aer": "0.17.2"
+  },
+  "timestamp_utc": "2026-05-25T17:49:33.083649+00:00",
+  "git_commit": "n/a",
+  "schema_version": "1.0"
+}
