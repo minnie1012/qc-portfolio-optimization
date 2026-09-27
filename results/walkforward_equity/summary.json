@@ -1,0 +1,161 @@
+{
+  "universe": "qubo (25 stocks, data/prices/prices_daily.csv)",
+  "tickers": [
+    "AAPL",
+    "MSFT",
+    "GOOG",
+    "AMZN",
+    "NVDA",
+    "META",
+    "JPM",
+    "GS",
+    "BAC",
+    "JNJ",
+    "UNH",
+    "PFE",
+    "KO",
+    "PG",
+    "NKE",
+    "WMT",
+    "XOM",
+    "CVX",
+    "CAT",
+    "HON",
+    "UPS",
+    "DIS",
+    "NFLX",
+    "TSLA",
+    "COST"
+  ],
+  "lookback_days": 252,
+  "hold_days": 21,
+  "rebalance_step": 21,
+  "K": 5,
+  "q": 1.0,
+  "qubo_weight_bounds": [
+    0.05,
+    0.5
+  ],
+  "mv_weight_bounds": [
+    0.0,
+    0.5
+  ],
+  "cost_bps_per_unit_turnover": 10.0,
+  "risk_free": "Treasury 3 Mo (point-in-time for allocation, realized daily for Sharpe)",
+  "rf_fallback_periods": 0,
+  "seed": 42,
+  "periods": 48,
+  "oos_start": "2022-01-04",
+  "oos_end": "2025-12-31",
+  "oos_days": 1002,
+  "avg_lw_delta_all_periods": 0.0682674043965284,
+  "metric_definitions": {
+    "annual_return": "CAGR of the concatenated daily OOS returns",
+    "annual_vol": "std(daily OOS returns, ddof=1) * sqrt(252)",
+    "sharpe": "mean/std of daily OOS excess returns over realized 3-Mo T-bill * sqrt(252)",
+    "max_drawdown": "min over OOS days of equity / running peak - 1",
+    "avg_turnover": "mean sum|w_target - w_drifted| per 21-day rebalance, excluding initial buy-in"
+  },
+  "strategies": {
+    "qubo_sample": {
+      "cov_method": "sample",
+      "gross": {
+        "annual_return": 0.2305165378499563,
+        "annual_vol": 0.21194625453144544,
+        "sharpe": 0.8917557628826839,
+        "max_drawdown": -0.22746275808089478,
+        "total_return": 1.281418086331906
+      },
+      "net": {
+        "annual_return": 0.22136989209931834,
+        "annual_vol": 0.2119150291334866,
+        "sharpe": 0.8566176185552455,
+        "max_drawdown": -0.2297647344700191,
+        "total_return": 1.2147313305048009
+      },
+      "avg_turnover": 0.6096823931210372,
+      "initial_turnover": 0.9999999999999999,
+      "avg_lw_delta": null
+    },
+    "qubo_lw": {
+      "cov_method": "ledoit_wolf",
+      "gross": {
+        "annual_return": 0.2371808005562852,
+        "annual_vol": 0.21665041049237224,
+        "sharpe": 0.9019164345234159,
+        "max_drawdown": -0.2262037942057311,
+        "total_return": 1.330944306390346
+      },
+      "net": {
+        "annual_return": 0.228026123992644,
+        "annual_vol": 0.21662565512820373,
+        "sharpe": 0.8676791968072518,
+        "max_drawdown": -0.2281846019801148,
+        "total_return": 1.263114005253691
+      },
+      "avg_turnover": 0.6068293685084952,
+      "initial_turnover": 1.0,
+      "avg_lw_delta": 0.0682674043965284
+    },
+    "mv_sample": {
+      "cov_method": "sample",
+      "gross": {
+        "annual_return": 0.17560207524086047,
+        "annual_vol": 0.20372266513862963,
+        "sharpe": 0.6950422843545789,
+        "max_drawdown": -0.2344537607419631,
+        "total_return": 0.9026920818213446
+      },
+      "net": {
+        "annual_return": 0.1669739959678811,
+        "annual_vol": 0.2037055836256129,
+        "sharpe": 0.6588926443343454,
+        "max_drawdown": -0.2366876532407418,
+        "total_return": 0.8477704599609039
+      },
+      "avg_turnover": 0.6017000375972267,
+      "initial_turnover": 0.9999999999999999,
+      "avg_lw_delta": null
+    },
+    "mv_lw": {
+      "cov_method": "ledoit_wolf",
+      "gross": {
+        "annual_return": 0.183186345648092,
+        "annual_vol": 0.20603364662414675,
+        "sharpe": 0.7207321845808976,
+        "max_drawdown": -0.2256220314696723,
+        "total_return": 0.9519704364808099
+      },
+      "net": {
+        "annual_return": 0.1748553725852986,
+        "annual_vol": 0.2060201915153652,
+        "sharpe": 0.6864397349928125,
+        "max_drawdown": -0.2277037540116167,
+        "total_return": 0.8978912937866126
+      },
+      "avg_turnover": 0.5763106414786081,
+      "initial_turnover": 1.0000000000000002,
+      "avg_lw_delta": 0.0682674043965284
+    },
+    "equal_weight": {
+      "cov_method": null,
+      "gross": {
+        "annual_return": 0.1364190905937388,
+        "annual_vol": 0.1768804062369223,
+        "sharpe": 0.5799079903262643,
+        "max_drawdown": -0.24269731645513948,
+        "total_return": 0.6627683043378279
+      },
+      "net": {
+        "annual_return": 0.13533174882519505,
+        "annual_vol": 0.17688664260831713,
+        "sharpe": 0.574478645283738,
+        "max_drawdown": -0.2431530750906875,
+        "total_return": 0.6564513453641043
+      },
+      "avg_turnover": 0.05969582532803527,
+      "initial_turnover": 1.0,
+      "avg_lw_delta": null
+    }
+  }
+}
