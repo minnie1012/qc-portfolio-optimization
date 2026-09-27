@@ -15,12 +15,14 @@ total-return series.
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import math
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 import sys
@@ -36,6 +38,7 @@ from benchmark_protocol.treasury import (  # noqa: E402
     load_yield_curve,
     yields_to_proxy_returns,
 )
+from benchmark_protocol.covariance import METHODS as COV_METHODS, estimate_cov  # noqa: E402
 from problem_definition import ProblemInstance, allocate, build_qubo, brute_force_select  # noqa: E402
 
 
@@ -69,7 +72,7 @@ def _equal_weight_returns(test_returns: pd.DataFrame) -> np.ndarray:
     return test_returns.to_numpy() @ w
 
 
-def rolling_backtest() -> tuple[list[dict], dict]:
+def rolling_backtest(cov_method: str = "sample") -> tuple[list[dict], dict]:
     yields = load_yield_curve(START_DATE, END_DATE)
     asset_cols = [m for m in DEFAULT_MATURITIES if m in yields.columns]
     if len(asset_cols) < 2:
@@ -89,6 +92,7 @@ def rolling_backtest() -> tuple[list[dict], dict]:
     all_port_daily: list[np.ndarray] = []
     all_bench_daily: list[np.ndarray] = []
     all_rf_daily: list[np.ndarray] = []
+    deltas: list[float] = []
 
     for start_ix in range(LOOKBACK_DAYS, len(returns) - HOLD_DAYS + 1, REBALANCE_STEP):
         train = returns.iloc[start_ix - LOOKBACK_DAYS : start_ix]
@@ -98,7 +102,9 @@ def rolling_backtest() -> tuple[list[dict], dict]:
         test_yields = yields.iloc[start_ix : start_ix + HOLD_DAYS]
 
         mu = train.mean().to_numpy() * 252.0
-        sigma = train.cov().to_numpy() * 252.0
+        sigma, delta = estimate_cov(train, method=cov_method, annualize=252)
+        if delta is not None:
+            deltas.append(delta)
         rf_annual = float(train_yields[RISK_FREE_TENOR].mean()) if not train_yields.empty else RISK_FREE_FALLBACK
         rf_annual /= 100.0
 
@@ -170,6 +176,8 @@ def rolling_backtest() -> tuple[list[dict], dict]:
         "select_k": SELECT_K,
         "asset_universe": asset_cols,
         "risk_free_tenor": RISK_FREE_TENOR,
+        "cov_method": cov_method,
+        "mean_lw_shrinkage": float(np.mean(deltas)) if deltas else None,
         "periods": len(rows),
         "portfolio": {
             "annual_return": _annualized_from_daily(port_concat)[0],
@@ -188,10 +196,19 @@ def rolling_backtest() -> tuple[list[dict], dict]:
 
 
 def main() -> None:
-    rows, summary = rolling_backtest()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--cov-method", choices=COV_METHODS, default="sample",
+        help="covariance estimator for the in-sample window (default: sample)",
+    )
+    args = parser.parse_args()
 
-    rows_csv = OUTDIR / "treasury_backtest_periods.csv"
-    summary_json = OUTDIR / "treasury_backtest_summary.json"
+    rows, summary = rolling_backtest(cov_method=args.cov_method)
+
+    # "sample" keeps the original filenames; other estimators get a suffix.
+    suffix = "" if args.cov_method == "sample" else f"_{args.cov_method}"
+    rows_csv = OUTDIR / f"treasury_backtest_periods{suffix}.csv"
+    summary_json = OUTDIR / f"treasury_backtest_summary{suffix}.json"
 
     with open(rows_csv, "w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
@@ -205,6 +222,7 @@ def main() -> None:
     print(f"wrote {summary_json}")
     print()
     print("Treasury backtest summary")
+    print(f"  cov method: {summary['cov_method']}")
     print(f"  periods: {summary['periods']}")
     print(f"  portfolio Sharpe: {summary['portfolio']['sharpe']:.4f}")
     print(f"  baseline  Sharpe: {summary['baseline']['sharpe']:.4f}")

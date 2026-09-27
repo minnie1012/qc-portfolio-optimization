@@ -194,7 +194,7 @@ def brute_force_select(Q: np.ndarray, K: int | None = None) -> tuple[np.ndarray,
 
 
 # ---------------------------------------------------------------------------
-# Synthetic data generator (Ledoit-Wolf-style PSD covariance)
+# Synthetic data generator (random PSD covariance)
 # ---------------------------------------------------------------------------
 
 def synthetic_instance(N: int, K: int, seed: int = 42) -> ProblemInstance:
