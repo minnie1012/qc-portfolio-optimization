@@ -5,9 +5,11 @@ QCSD x TQT Quantum Finance Project
 
 ```
 benchmark_protocol/             benchmarking package: instance loader, result schema,
-                                gate-metrics, prices loader, aggregator, solver template
+                                gate-metrics, prices loader, aggregator, solver template,
+                                covariance.py (sample / Ledoit-Wolf estimate_cov)
 classical-algorithm/            brute_force.py, simulated_annealing.py
 quantum-optimization-algorithm/ qaoa.py, cvar_vqe.py
+                                backtest_qaoa.py (realized OOS Sharpe, offline prices)
 data/instances/                 57 instance JSONs (mu, sigma, K, q, asset_tickers)
                                 annualized from real prices, in-sample 2022-01..2024-12
 data/instances_real/            4 ablation instances built directly from each CSV
@@ -23,11 +25,18 @@ scripts/
   run_benchmarks.py                    run all 4 solvers on data/instances/
   run_csv_backtest.py                  run all 4 solvers on data/instances_real/
   treasury_backtest.py                 rolling Treasury-bond proxy backtest with Sharpe ratio
+                                       (--cov-method sample|ledoit_wolf)
+  walkforward_equity_backtest.py       walk-forward 25-stock backtest: QUBO-select vs.
+                                       mean-variance vs. 1/N, sample vs. Ledoit-Wolf
   compare_metrics.py                   §6 priority metrics summary
   portfolio_metrics.py                 annual return, Sharpe, OOS backtest
   fetch_prices.py                      pull fresh prices from yfinance
+tests/                          pytest: covariance estimators, exact K-subset solver
 results/
   raw/                          one BenchmarkResult JSON per (algorithm, instance, seed)
+  walkforward_equity/           periods.csv, summary.json, equity_curves.png, FINDINGS.md
+  treasury_backtest/            sample and *_ledoit_wolf Treasury backtest outputs
+  backtest/                     qaoa_backtest_results_oos_sharpe.csv (realized OOS Sharpe)
   summary_tables/               all_runs.csv, comparison_metrics.json,
                                 portfolio_metrics.csv
 ```
@@ -40,6 +49,10 @@ python scripts/build_real_instances.py               # data/instances_real/
 python scripts/run_benchmarks.py                     # 184 jobs
 python scripts/run_csv_backtest.py                   # 16 jobs
 python scripts/treasury_backtest.py                  # Treasury proxy backtest + Sharpe
+python scripts/treasury_backtest.py --cov-method ledoit_wolf   # same, Ledoit-Wolf covariance
+python scripts/walkforward_equity_backtest.py        # results/walkforward_equity/
+python quantum-optimization-algorithm/backtest_qaoa.py   # QAOA OOS Sharpe (offline)
+pytest tests/                                        # covariance + solver unit tests
 python -m benchmark_protocol.aggregate               # all_runs.csv
 python scripts/compare_metrics.py                    # comparison_metrics.json
 python scripts/portfolio_metrics.py                  # portfolio_metrics.csv
